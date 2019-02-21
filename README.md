@@ -9,11 +9,11 @@ and SQL databases supported by sqlalchemy.
 
 The main reason for building this is to make it easier have database integration
 with [enaml](https://github.com/nucleic/enaml) applications.  Without this,
-a separate is needed framework to define database models which is a
+a separate framework is needed to define database models, which is a
 duplication of work.
 
-This was originally a part of enaml-web but has been pulled out to a separate
-package.
+This was originally a part of [enaml-web](https://github.com/codelv/enaml-web)
+but has been pulled out to a separate package.
 
 
 ### Structure
