@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/codelv/atom-db.svg?branch=master)](https://travis-ci.org/codelv/atom-db)
+[![codecov](https://codecov.io/gh/codelv/atom-db/branch/master/graph/badge.svg)](https://codecov.io/gh/codelv/atom-db)
+
 atom-db is a database abstraction layer for the
 [atom](https://github.com/nucleic/atom) framework. Atom is a memory
 efficient object framework for python. This package provides api's for
