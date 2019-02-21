@@ -2,8 +2,10 @@ import pytest
 from pprint import pprint
 from atom.api import *
 from atomdb.sql import SQLModel, SQLModelManager
-from utils import faker
+from faker import Faker
 from aiomysql.sa import create_engine
+
+faker = Faker()
 
 
 class User(SQLModel):

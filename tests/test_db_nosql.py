@@ -3,7 +3,9 @@ from pprint import pprint
 from atom.api import *
 from motor.motor_asyncio import AsyncIOMotorClient
 from atomdb.nosql import NoSQLModel
-from utils import faker
+from faker import Faker
+
+faker = Faker()
 
 
 class User(NoSQLModel):

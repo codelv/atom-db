@@ -17,6 +17,7 @@ from atom import api
 from atom.api import Atom, Int, Dict, Instance
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
 
+DEFAULT_DATABASE = None
 
 # kwargs reserved for sqlalchemy table columns
 COLUMN_KWARGS = (

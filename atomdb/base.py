@@ -228,7 +228,7 @@ class ModelManager(Atom):
         raise NotImplementedError
 
     #: Used to access the database
-    database = Property(get_database)
+    database = Property(lambda self: self.get_database())
 
     def __get__(self, obj, cls=None):
         """ Handle objects from the class that owns the manager. Subclasses
