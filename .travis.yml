@@ -1,0 +1,26 @@
+dist: xenial
+language: python
+
+python:
+  - "3.6"
+  - "3.7"
+
+services:
+  - mongodb
+  - mysql
+
+install:
+  # Setup
+  - pip install atom motor markdown sqlalchemy aiomysql
+
+  # Testing
+  - pip install codecov pytest pytest-coverage pytest-asyncio faker
+
+  # Install
+  - python setup.py develop
+
+script:
+  - pytest -v tests --cov atomdb --cov-report xml
+
+after_success:
+  - codecov

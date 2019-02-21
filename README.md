@@ -23,7 +23,7 @@ manager for that type of object which can be used to create queries. No
 restriction is imposed on what type of manager is used, leaving that to
 whichever database library is preferred (ex motor, txmongo, sqlalchemy,...).
 
-In addition to `Model.objects` a serialier is added to each class as
+In addition to `Model.objects` a serializer is added to each class as
 `Model.serializer` which is used to serialize and deserialize the objects
 to and from the database.
 

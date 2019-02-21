@@ -36,9 +36,11 @@ class Comment(NoSQLModel):
 
 @pytest.yield_fixture()
 def db(event_loop):
+    import atomdb.nosql
     client = AsyncIOMotorClient(io_loop=event_loop)
     db = client.enaml_web_test_db
-    yield app
+    atomdb.nosql.DEFAULT_DATABASE = db
+    yield db
 
 
 @pytest.mark.asyncio
