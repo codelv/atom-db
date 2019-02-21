@@ -1,31 +1,49 @@
+import os
+import re
 import pytest
+import atomdb.sql
+from datetime import datetime, date, time
 from pprint import pprint
 from atom.api import *
 from atomdb.sql import SQLModel, SQLModelManager
 from faker import Faker
+import aiomysql
 from aiomysql.sa import create_engine
 
+
 faker = Faker()
+
+if 'MYSQL_URL' not in os.environ:
+    os.environ['MYSQL_URL'] = 'mysql://mysql:mysql@127.0.0.1:3306/test_atomdb'
+
+DATABASE_URL = os.environ['MYSQL_URL']
 
 
 class User(SQLModel):
     name = Unicode().tag(length=200)
-    email = Unicode()
+    email = Unicode().tag(length=64)
     active = Bool()
+    age = Int()
+    hashed_password = Bytes()
 
 
 class Image(SQLModel):
     name = Unicode()
     path = Unicode()
+    metadata = Dict()
 
 
 class Page(SQLModel):
-    title = Unicode()
+    title = Str()
     status = Enum('preview', 'live')
     body = Unicode()
     author = Instance(User)
     images = List(Image)
     related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
+    rating = Float()
+    visits = Long()
+    date = Instance(date)
+    last_updated = Instance(datetime)
 
 
 class Comment(SQLModel):
@@ -34,6 +52,7 @@ class Comment(SQLModel):
     status = Enum('pending', 'approved')
     body = Unicode()
     reply_to = ForwardInstance(lambda: Comment).tag(nullable=True)
+    date = Instance(date)
 
 
 def test_build_tables():
@@ -47,22 +66,48 @@ def test_custom_table_name():
     class Test(SQLModel):
         __model__ = table_name
 
-    assert Test.objects.table.name == table_name
+    assert Test.objects.name == table_name
 
 
-@pytest.yield_fixture()
-def db(event_loop):
-    import atomdb.sql
-    client = AsyncIOMotorClient(io_loop=event_loop)
-    db = client.enaml_web_test_db
-    atomdb.sql.DEFAULT_DATABASE = db
-    yield db
+@pytest.fixture
+async def db(event_loop):
+    m = re.match(r'mysql://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
+    assert m, "MYSQL_URL is an invalid format"
+    user, pwd, host, port, db = m.groups()
+
+    params = dict(
+        host=host, port=int(port), user=user, password=pwd, loop=event_loop)
+
+    # Create the DB
+    async with aiomysql.connect(**params) as conn:
+        async with conn.cursor() as c:
+            # WARNING: Not safe
+            await c.execute('DROP DATABASE IF EXISTS %s;' % db)
+            await c.execute('CREATE DATABASE %s;' % db)
+
+    async with create_engine(db=db, **params) as engine:
+        atomdb.sql.DEFAULT_DATABASE = engine
+        yield engine
+
 
 @pytest.mark.asyncio
-async def est_simple_save_restore_delete(app):
-    engine = await create_engine()
-    app.database = engine
-    await User.objects.drop()
+async def test_drop_create_table(db):
+    try:
+        await User.objects.drop()
+    except Exception as e:
+        if 'Unknown table' not in str(e):
+            raise
+    await User.objects.create()
+
+
+@pytest.mark.asyncio
+async def est_simple_save_restore_delete(db):
+    try:
+        await User.objects.drop()
+    except Exception as e:
+        if 'Unknown table' not in str(e):
+            raise
+    await User.objects.create()
 
     # Save
     user = User(name=faker.name(), email=faker.email(), active=True)
@@ -86,9 +131,7 @@ async def est_simple_save_restore_delete(app):
 
 
 @pytest.mark.asyncio
-async def est_nested_save_restore(app):
-    engine = await create_engine()
-    app.database = engine
+async def est_nested_save_restore(engine):
     await Image.objects.drop()
     await User.objects.drop()
     await Page.objects.drop()
@@ -152,11 +195,9 @@ async def est_nested_save_restore(app):
 
 
 @pytest.mark.asyncio
-async def est_circular(app):
+async def est_circular(db):
     # Test that a circular reference is properly stored as a reference
     # and doesn't create an infinite loop
-    engine = await create_engine()
-    app.database = engine
     await Page.objects.drop()
 
     p = Page(title=faker.catch_phrase(), body=faker.text())

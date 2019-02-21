@@ -14,8 +14,10 @@ import datetime
 import sqlalchemy as sa
 from functools import wraps
 from atom import api
-from atom.api import Atom, Int, Dict, Instance
+from atom.api import Atom, ContainerList, Int, Dict, Instance, Typed
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
+from sqlalchemy.engine import ddl, strategies
+from sqlalchemy.sql import schema
 
 DEFAULT_DATABASE = None
 
@@ -148,7 +150,7 @@ def create_table_column(member):
     return sa.Column(member.name, *args, **kwargs)
 
 
-def create_table(model):
+def create_table(model, **metadata):
     """ Create an sqlalchemy table by inspecting the Model and generating
     a column for each member.
 
@@ -156,7 +158,7 @@ def create_table(model):
     if not issubclass(model, Model):
         raise TypeError("Only Models are supported")
     name = model.__model__
-    metadata = sa.MetaData()
+    metadata = sa.MetaData(**metadata)
     members = model.members()
     columns = (create_table_column(members[f]) for f in model.__fields__)
     return sa.Table(name, metadata, *columns)
@@ -184,9 +186,19 @@ class SQLModelManager(ModelManager):
     #: Mapping of model to table used to store the model
     tables = Dict()
 
+    #: DB URL
+    url = Typed(sa.engine.url.URL)
+
     def _default_tables(self):
         """ Create all the tables """
         return {m: create_table(m) for m in find_subclasses(SQLModel)}
+
+    def _default_url(self):
+        env = os.environ
+        url = env.get('DATABASE_URL', env.get('MYSQL_URL'))
+        if url is None:
+            raise EnvironmentError("No DATABASE_URL has been set")
+        return sa.engine.url.make_url(url)
 
     def __get__(self, obj, cls=None):
         """ Retrieve the table for the requested object or class.
@@ -196,33 +208,147 @@ class SQLModelManager(ModelManager):
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
         if cls not in self.tables:
-            self.tables[cls] = create_table(cls)
+            table = self.tables[cls] = create_table(cls)
         table = self.tables[cls]
-        return SQLClient(manager=self, table=table)
+        table.metadata.bind = SQLBinding(manager=self, table=table)
+        return SQLTableProxy(table=table)
 
     def get_database(self):
         db = DEFAULT_DATABASE
         if db is None:
-            raise EnvironmentError("No database has been set")
+            raise EnvironmentError("No database engine has been set")
         return db
 
+    def get_dialect(self, **kwargs):
+        # create url.URL object
+        url = self.url
 
-class SQLClient(Atom):
-    """ A light wrapper that ensures that a connection to the DB is aquired
-    before each transaction.
+        dialect_cls = url.get_dialect()
 
-    """
-    #: Engine instance for the given backend
-    manager = Instance(SQLModelManager)
+        dialect_args = {}
+        # consume dialect arguments from kwargs
+        for k in sa.util.get_cls_kwargs(dialect_cls):
+            if k in kwargs:
+                dialect_args[k] = kwargs.pop(k)
 
-    #: Table instance
+        # create dialect
+        return dialect_cls(**dialect_args)
+
+
+class SQLTableProxy(Atom):
     table = Instance(sa.Table)
 
-    async def __getattr__(self, attr):
-        """ Wrap each query """
+    def __getattr__(self, name):
+        attr = getattr(self.table, name)
+        if not callable(attr):
+            return attr
+        async def wrapped(*args, **kwargs):
+            r = attr(*args, **kwargs)
+            binding = self.table.bind
+            return await binding.run_until_current()
+        return wrapped
+
+
+class SQLBinding(Atom):
+    #: Model Manager
+    manager = Instance(SQLModelManager)
+
+    #: Dialect
+    dialect = Instance(object)
+
+    #: The queue
+    _queue = ContainerList()
+
+    #: Dialect name
+    name = api.Unicode()
+
+    table = Instance(sa.Table)
+
+    engine = property(lambda s: s)
+    schema_for_object = schema._schema_getter(None)
+
+    def _default_name(self):
+        return self.dialect.name
+
+    def _default_dialect(self):
+        return self.manager.get_dialect()
+
+    def contextual_connect(self, **kwargs):
+        return self
+
+    def connect(self, **kwargs):
+        return self
+
+    def execution_options(self, **kw):
+        return self
+
+    def compiler(self, statement, parameters, **kwargs):
+        return self.dialect.compiler(
+            statement, parameters, engine=self, **kwargs)
+
+    def create(self, entity, **kwargs):
+        kwargs["checkfirst"] = False
+        node = ddl.SchemaGenerator(self.dialect, self, **kwargs)
+        node.traverse_single(entity)
+        return self
+
+    def drop(self, entity, **kwargs):
+        kwargs["checkfirst"] = False
+        node = ddl.SchemaDropper(self.dialect, self, **kwargs)
+        node.traverse_single(entity)
+        print((entity, self.dialect, node))
+        return self
+
+    def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
+        kwargs["checkfirst"] = False
+        node = visitorcallable(self.dialect, self, **kwargs)
+        node.traverse_single(element)
+        return self
+
+    def execute(self, object_, *multiparams, **params):
+        self._queue.append((object_, multiparams, params))
+        return self
+
+    def _observe__queue(self, change):
+        print(change)
+
+    @property
+    def has_pending(self):
+        return bool(self._queue)
+
+    async def run_until_current(self):
         engine = self.manager.database
-        async with engine.aquire() as conn:
-            return getattr(conn, attr)(*args, **kwargs)
+        result = None
+        async with engine.acquire() as conn:
+            while self._queue:
+                op, args, kwargs = self._queue.pop(0)
+                result = await conn.execute(op, args)#, kwargs)
+        return result
+
+
+#class SQLBinding(Atom):
+
+
+    #def _run_visitor(self, *args, **kwargs):
+        #""" Binding that defers all calls into a queue then invokes
+        #them all async
+
+        #"""
+
+    #async def create_table(self):
+        #async with self.manager.database.acquire() as conn:
+            #return await conn.execute(self.table.metadata.create_all(conn))
+
+    #async def filter(self, **kwargs):
+        #async with self.manager.database.acquire() as conn:
+            #return await conn.execute(self.table.filter(**kwargs))
+
+    #async def drop_table(self):
+        #async with self.manager.database.acquire() as conn:
+            #This can't be paramertized? WTF SQL
+            #name = self.table.name
+            #return await conn.execute('DROP TABLE IF EXISTS %s;' % name)
+
 
 
 class SQLModel(Model):

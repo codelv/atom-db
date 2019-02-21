@@ -11,7 +11,7 @@ services:
 
 install:
   # Setup
-  - pip install atom motor markdown sqlalchemy aiomysql
+  - pip install atom motor sqlalchemy aiomysql
 
   # Testing
   - pip install codecov pytest pytest-coverage pytest-asyncio faker
