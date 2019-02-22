@@ -14,6 +14,10 @@ class User(NoSQLModel):
     name = Unicode()
     email = Unicode()
     active = Bool()
+    settings = Dict()
+
+    def _default_settings(self):
+        return {'font-size': 16, 'theme': 'maroon'}
 
 
 class Image(NoSQLModel):
