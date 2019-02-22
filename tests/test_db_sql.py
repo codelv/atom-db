@@ -29,7 +29,6 @@ class User(SQLModel):
     hashed_password = Bytes()
 
 
-
 class Image(SQLModel):
     name = Unicode()
     path = Unicode()
@@ -39,7 +38,7 @@ class Image(SQLModel):
 class Page(SQLModel):
     title = Str()
     status = Enum('preview', 'live')
-    body = Unicode()
+    body = Unicode().tag(type=sa.UnicodeText())
     author = Instance(User)
     images = List(Image)
     related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
@@ -73,7 +72,7 @@ def test_custom_table_name():
     class Test(SQLModel):
         __model__ = table_name
 
-    assert Test.objects.name == table_name
+    assert Test.objects.table.name == table_name
 
 
 @pytest.fixture
@@ -153,6 +152,15 @@ async def test_simple_save_restore_delete(db):
     state = await User.objects.get(name=another_user.name)
     assert state
 
+
+@pytest.mark.asyncio
+async def test_query(db):
+    await User.objects.create()
+    async for row in User.objects.all():
+        print(row)
+
+    async for row in User.objects.filter(name="Bob"):
+        print(row)
 
 
 @pytest.mark.asyncio

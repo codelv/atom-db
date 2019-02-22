@@ -1,5 +1,5 @@
 """
-Copyright (c) 2018, Jairus Martin.
+Copyright (c) 2018-2019, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -19,6 +19,7 @@ from atom.api import (
 )
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
+from sqlalchemy.orm.query import Query
 
 from .base import (
     ModelManager, ModelSerializer, Model, ModelMeta, with_metaclass,
@@ -85,6 +86,8 @@ def atom_member_to_sql_column(member, **kwargs):
         return sa.Float()
     elif isinstance(member, api.Enum):
         return sa.Enum(*member.items)
+    elif isinstance(member, api.IntEnum):
+        return sa.SmallInteger()
     elif isinstance(member, (api.Instance, api.Typed,
                              api.ForwardInstance, api.ForwardTyped)):
         if hasattr(member, 'resolve'):
@@ -93,6 +96,9 @@ def atom_member_to_sql_column(member, **kwargs):
             value_type = member.validate_mode[-1]
         if value_type is None:
             raise TypeError("Instance and Typed members must specify types")
+        elif isinstance(value_type, Model):
+            name = f'{value_type.__model__}.{value_type.__pk__}'
+            return (sa.Integer, sa.ForeignKey(name))
         return py_type_to_sql_column(value_type, **kwargs)
     elif isinstance(member, (api.List, api.ContainerList, api.Tuple)):
         item_type = member.validate_mode[-1]
@@ -108,8 +114,8 @@ def atom_member_to_sql_column(member, **kwargs):
         if value_type is None:
             raise TypeError("List and Tuple members must specify types")
         elif isinstance(value_type, Model):
-            name = f'{value_type.__model__}._id'
-            return (sa.Integer, sa.ForeignKey(name))
+            name = f'{value_type.__model__}.{value_type.__pk__}'
+            return sa.relationship(name)
         return sa.ARRAY(py_type_to_sql_column(value_type, **kwargs))
     elif isinstance(member, api.Bytes):
         return sa.LargeBinary(**kwargs)
@@ -145,6 +151,8 @@ def create_table_column(member):
         return metadata['column']
 
     metadata.pop('store', None)
+    column_name = metadata.pop('name', member.name)
+    column_type = metadata.pop('type', None)
 
     # Extract column kwargs from member metadata
     kwargs = {}
@@ -152,10 +160,13 @@ def create_table_column(member):
         if k in metadata:
             kwargs[k] = metadata.pop(k)
 
-    args = atom_member_to_sql_column(member, **metadata)
-    if not isinstance(args, (tuple, list)):
-        args = (args,)
-    return sa.Column(member.name, *args, **kwargs)
+    if column_type is None:
+        args = atom_member_to_sql_column(member, **metadata)
+        if not isinstance(args, (tuple, list)):
+            args = (args,)
+    else:
+        args = (column_type,)
+    return sa.Column(column_name, *args, **kwargs)
 
 
 def create_table(model, **metadata):
@@ -211,10 +222,11 @@ class SQLModelManager(ModelManager):
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
-        if cls not in self.tables:
+        table = self.tables.get(cls)
+        if table is None:
             table = self.tables[cls] = create_table(cls)
-        table = self.tables[cls]
-        table.metadata.bind = SQLBinding(manager=self, table=table)
+        if not table.bind:
+            table.metadata.bind = SQLBinding(manager=self, table=table)
         return SQLTableProxy(table=table, model=cls)
 
     def get_database(self):
@@ -243,23 +255,59 @@ class SQLTableProxy(Atom):
     table = Instance(sa.Table)
     model = Subclass(Model)
 
-    def __getattr__(self, name):
-        attr = getattr(self.table, name)
-        if not callable(attr):
-            return attr
-        async def wrapped(*args, **kwargs):
-            r = attr(*args, **kwargs)
-            binding = self.table.bind
-            return await binding.wait()
-        return wrapped
+    #def __getattr__(self, name):
+        #attr = getattr(self.table, name)
+        #if not callable(attr):
+            #return attr
+
+        #def wrapped(*args, **kwargs):
+            #r = attr(*args, **kwargs)
+            #binding = self.table.bind
+            #if binding.queue:  # Pending events
+                #return binding.wait()
+            #return r
+        #return wrapped
 
     @property
     def engine(self):
         return self.table.bind.manager.database
 
+    @property
+    def connection(self):
+        return self.engine.acquire
+
+    def create(self):
+        """ A wrapper for create which catches the create queries then executes
+        them
+        """
+        table = self.table
+        table.create()
+        return table.bind.wait()
+
+    def drop(self):
+        table = self.table
+        table.drop()
+        return table.bind.wait()
+
     async def execute(self, *args, **kwargs):
         async with self.engine.acquire() as conn:
             return await conn.execute(*args, **kwargs)
+
+    def all(self):
+        return self.filter()
+
+    async def filter(self, **filters):
+        async with self.engine.acquire() as conn:
+            table = self.table
+            q = table.select()
+            if filters:
+                q = q.where(
+                    *(table.c[k] == v for k, v in filters.items()))
+            r = await self.execute(q)
+            for row in await r.fetchall():
+                state = {k: v for k, v in zip(row.keys(), row.values())}
+                state['__model__'] = self.model.__model__
+                yield state
 
     async def get(self, **filters):
         async with self.engine.acquire() as conn:
@@ -283,7 +331,7 @@ class SQLBinding(Atom):
     dialect = Instance(object)
 
     #: The queue
-    _queue = ContainerList()
+    queue = ContainerList()
 
     #: Dialect name
     name = Str()
@@ -316,30 +364,26 @@ class SQLBinding(Atom):
         kwargs["checkfirst"] = False
         node = ddl.SchemaGenerator(self.dialect, self, **kwargs)
         node.traverse_single(entity)
-        return self
 
     def drop(self, entity, **kwargs):
         kwargs["checkfirst"] = False
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
-        return self
 
     def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
         kwargs["checkfirst"] = False
         node = visitorcallable(self.dialect, self, **kwargs)
         node.traverse_single(element)
-        return self
 
     def execute(self, object_, *multiparams, **params):
-        self._queue.append((object_, multiparams, params))
-        return self
+        self.queue.append((object_, multiparams, params))
 
     async def wait(self):
         engine = self.manager.database
         result = None
         async with engine.acquire() as conn:
-            while self._queue:
-                op, args, kwargs = self._queue.pop(0)
+            while self.queue:
+                op, args, kwargs = self.queue.pop(0)
                 result = await conn.execute(op, args)#, kwargs)
         return result
 
@@ -379,7 +423,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     """
 
     #: If no other member is tagged with primary_key=True this is used
-    _id = Typed(int).tag(store=True, primary_key=True)
+    _id = Int().tag(store=True, primary_key=True)
 
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
@@ -396,7 +440,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         state.pop('_id', None)
         table = db.table
         async with db.engine.acquire() as conn:
-            if self._id is not None:
+            if self._id:
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
@@ -411,7 +455,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         """ Alias to delete this object in the database """
         db = self.objects
         table = db.table
-        if self._id is not None:
+        if self._id:
             async with db.engine.acquire() as conn:
                 q = table.delete().where(table.c[self.__pk__] == self._id)
                 await conn.execute(q)

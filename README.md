@@ -2,10 +2,9 @@
 [![codecov](https://codecov.io/gh/codelv/atom-db/branch/master/graph/badge.svg)](https://codecov.io/gh/codelv/atom-db)
 
 atom-db is a database abstraction layer for the
-[atom](https://github.com/nucleic/atom) framework. Atom is a memory
-efficient object framework for python. This package provides api's for
+[atom](https://github.com/nucleic/atom) framework. This package provides api's for
 seamlessly saving and restoring atom objects from json based document databases
-and SQL databases supported by sqlalchemy.
+and (coming soon) SQL databases supported by sqlalchemy.
 
 
 ### Why?
@@ -97,6 +96,10 @@ assert not await User.objects.find_one({'name': "Tom"})
 You can exclude members from being saved to the DB by tagging them
 with `.tag(store=False)`.
 
+
+### SQL with aiomysql
+
+> Note: SQL support is currently a WIP.
 
 
 ### Contributing
