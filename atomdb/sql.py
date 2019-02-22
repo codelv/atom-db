@@ -34,23 +34,23 @@ def py_type_to_sql_column(cls, **kwargs):
 
     """
     if issubclass(cls, Model):
-        name =  f'{cls.__model__}._id'
+        name = f'{cls.__model__}._id'
         return (sa.Integer, sa.ForeignKey(name))
     elif issubclass(cls, str):
         return sa.String(**kwargs)
     elif issubclass(cls, int):
         return sa.Integer(**kwargs)
     elif issubclass(cls, float):
-        return sa.Integer(**kwargs)
+        return sa.Float(**kwargs)
     elif issubclass(cls, datetime.datetime):
         return sa.DateTime(**kwargs)
     elif issubclass(cls, datetime.date):
         return sa.Date(**kwargs)
     elif issubclass(cls, datetime.time):
         return sa.Time(**kwargs)
-    raise NotImplementedError(f"A column for {cls} could not be detected, "
-                              "please specifiy it manually by tagging it with "
-                              ".tag(column=<sqlalchemy column>)")
+    raise NotImplementedError(
+        f"A column for {cls} could not be detected, please specify it "
+        f"manually by tagging it with .tag(column=<sqlalchemy column>)")
 
 
 def atom_member_to_sql_column(member, **kwargs):
@@ -84,12 +84,12 @@ def atom_member_to_sql_column(member, **kwargs):
         else:
             value_type = member.validate_mode[-1]
         if value_type is None:
-            raise TypeError("Instance and Typed members must specifiy types")
+            raise TypeError("Instance and Typed members must specify types")
         return py_type_to_sql_column(value_type, **kwargs)
     elif isinstance(member, (api.List, api.ContainerList, api.Tuple)):
         item_type = member.validate_mode[-1]
         if item_type is None:
-            raise TypeError("List and Tuple members must specifiy types")
+            raise TypeError("List and Tuple members must specify types")
 
         # Resolve the item type
         if hasattr(item_type, 'resolve'):
@@ -98,18 +98,18 @@ def atom_member_to_sql_column(member, **kwargs):
             value_type = item_type.validate_mode[-1]
 
         if value_type is None:
-            raise TypeError("List and Tuple members must specifiy types")
+            raise TypeError("List and Tuple members must specify types")
         elif isinstance(value_type, Model):
-            name =  f'{value_type.__model__}._id'
+            name = f'{value_type.__model__}._id'
             return (sa.Integer, sa.ForeignKey(name))
         return sa.ARRAY(py_type_to_sql_column(value_type, **kwargs))
     elif isinstance(member, api.Bytes):
         return sa.LargeBinary(**kwargs)
     elif isinstance(member, api.Dict):
         return sa.JSON(**kwargs)
-    raise NotImplementedError(f"A column for {member} could not be detected, "
-                              "please specifiy it manually by tagging it with "
-                              ".tag(column=<sqlalchemy column>)")
+    raise NotImplementedError(
+        f"A column for {member} could not be detected, please specify it"
+        f"manually by tagging it with .tag(column=<sqlalchemy column>)")
 
 
 def create_table_column(member):
@@ -267,7 +267,6 @@ class SQLTableProxy(Atom):
             state = {k: v for k, v in zip(row.keys(), row.values())}
             state['__model__'] = self.model.__model__
             return state
-
 
 
 class SQLBinding(Atom):

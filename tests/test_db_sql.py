@@ -1,14 +1,15 @@
 import os
 import re
 import pytest
+import aiomysql
 import atomdb.sql
-from datetime import datetime, date, time
-from pprint import pprint
+import sqlalchemy as sa
+from aiomysql.sa import create_engine
 from atom.api import *
 from atomdb.sql import SQLModel, SQLModelManager
+from datetime import datetime, date, time
 from faker import Faker
-import aiomysql
-from aiomysql.sa import create_engine
+from pprint import pprint
 
 
 faker = Faker()
@@ -25,6 +26,7 @@ class User(SQLModel):
     active = Bool()
     age = Int()
     hashed_password = Bytes()
+
 
 
 class Image(SQLModel):
@@ -44,6 +46,10 @@ class Page(SQLModel):
     visits = Long()
     date = Instance(date)
     last_updated = Instance(datetime)
+    tags = List(str)
+
+    # A bit verbose but provides a custom column specification
+    data = Instance(object).tag(column=sa.Column('data', sa.LargeBinary()))
 
 
 class Comment(SQLModel):
@@ -52,7 +58,7 @@ class Comment(SQLModel):
     status = Enum('pending', 'approved')
     body = Unicode()
     reply_to = ForwardInstance(lambda: Comment).tag(nullable=True)
-    date = Instance(date)
+    when = Instance(time)
 
 
 def test_build_tables():
