@@ -97,9 +97,19 @@ You can exclude members from being saved to the DB by tagging them
 with `.tag(store=False)`.
 
 
-### SQL with aiomysql
+### SQL with aiomysql / aiopg
 
-> Note: SQL support is currently a WIP.
+> SQL support is currently a WIP. Currently only basic operations like
+creation of tables, dropping tables, and simple queries are working
+(no joins work yet).
+
+Just define models using atom members, but subclass the SQLModel.
+
+Tag members with information needed for sqlalchemy tables, ex
+`Str().tag(length=40)` will make a `sa.String(40)`.
+See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
+
+
 
 
 ### Contributing
