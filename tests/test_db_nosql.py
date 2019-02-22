@@ -1,9 +1,11 @@
 import pytest
-from pprint import pprint
+import atomdb.nosql
 from atom.api import *
-from motor.motor_asyncio import AsyncIOMotorClient
 from atomdb.nosql import NoSQLModel
 from faker import Faker
+from motor.motor_asyncio import AsyncIOMotorClient
+from pprint import pprint
+
 
 faker = Faker()
 
@@ -38,11 +40,31 @@ class Comment(NoSQLModel):
 
 @pytest.yield_fixture()
 def db(event_loop):
-    import atomdb.nosql
     client = AsyncIOMotorClient(io_loop=event_loop)
     db = client.enaml_web_test_db
     atomdb.nosql.DEFAULT_DATABASE = db
     yield db
+
+
+@pytest.mark.asyncio
+async def test_db_manager(db):
+    from atomdb.nosql import NoSQLModelManager
+    mgr = NoSQLModelManager.instance()
+    assert db == mgr.get_database()
+
+    # Check non-model access, it should not return the collection
+    class NotModel(Atom):
+        objects = mgr
+    assert NotModel.objects == mgr
+
+    # Now change it
+    atomdb.nosql.DEFAULT_DATABASE = None
+    with pytest.raises(EnvironmentError):
+        await User.objects.find().to_list(length=10)
+
+    # And restore
+    atomdb.nosql.DEFAULT_DATABASE = db
+    await User.objects.find().to_list(length=10)
 
 
 @pytest.mark.asyncio
@@ -64,10 +86,27 @@ async def test_simple_save_restore_delete(db):
     assert u.email == user.email
     assert u.active == user.active
 
+    # Update
+    user.active = False
+    await user.save()
+
+    state = await User.objects.find_one({'name': user.name})
+    assert state
+    u = await User.restore(state)
+    assert not u.active
+
+    # Create second user
+    another_user = User(name=faker.name(), email=faker.email(), active=True)
+    await another_user.save()
+
     # Delete
     await user.delete()
     state = await User.objects.find_one({"name": user.name})
     assert not state
+
+    # Make sure second user still exists
+    state = await User.objects.find_one({"name": another_user.name})
+    assert state
 
 
 @pytest.mark.asyncio

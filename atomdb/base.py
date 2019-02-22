@@ -10,6 +10,7 @@ Created on Jun 12, 2018
 @author: jrm
 """
 import os
+import logging
 import traceback
 from atom.api import (
     Atom, Property, Instance, Dict, Unicode, Coerced, Value, Typed, Bytes
@@ -17,6 +18,8 @@ from atom.api import (
 from atom.atom import AtomMeta, with_metaclass
 from atom.dict import _DictProxy
 from pprint import pformat
+
+logger = logging.getLogger('atomdb')
 
 
 def find_subclasses(cls):
@@ -344,7 +347,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
                 setattr(self, k, obj)
             except Exception as e:
                 exc = traceback.format_exc()
-                WebApplication.instance().logger.error(
+                logger.error(
                     f"Error setting state:"
                     f"{self.__model__}.{k} = {pformat(obj)}:"
                     f"\nSelf: {ref}: {scope.get(ref)}"
