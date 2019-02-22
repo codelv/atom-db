@@ -21,6 +21,7 @@ DATABASE_URL = os.environ['MYSQL_URL']
 
 
 class User(SQLModel):
+    id = Typed(int).tag(primary_key=True)
     name = Unicode().tag(length=200)
     email = Unicode().tag(length=64)
     active = Bool()
@@ -130,10 +131,28 @@ async def test_simple_save_restore_delete(db):
     assert u.email == user.email
     assert u.active == user.active
 
+    # Update
+    user.active = False
+    await user.save()
+
+    state = await User.objects.get(name=user.name)
+    assert state
+    u = await User.restore(state)
+    assert not u.active
+
+    # Create second user
+    another_user = User(name=faker.name(), email=faker.email(), active=True)
+    await another_user.save()
+
     # Delete
     await user.delete()
     state = await User.objects.get(name=user.name)
     assert not state
+
+    # Make sure second user still exists
+    state = await User.objects.get(name=another_user.name)
+    assert state
+
 
 
 @pytest.mark.asyncio

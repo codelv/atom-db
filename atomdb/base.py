@@ -315,10 +315,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
 
         """
         unflatten = self.serializer.unflatten
-        name = state.get('__model__')
-
-        if name is None:
-            raise ValueError("State must contain the __model__ key")
+        name = state.get('__model__', self.__model__)
         if name != self.__model__:
             raise ValueError(f"Trying to use {name} state for "
                              f"{self.__model__} object")

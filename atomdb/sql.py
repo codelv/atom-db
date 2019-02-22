@@ -14,10 +14,17 @@ import datetime
 import sqlalchemy as sa
 from functools import wraps
 from atom import api
-from atom.api import Atom, Subclass, ContainerList, Int, Dict, Instance, Typed
-from .base import ModelManager, ModelSerializer, Model, find_subclasses
+from atom.api import (
+    Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str
+)
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
+
+from .base import (
+    ModelManager, ModelSerializer, Model, ModelMeta, with_metaclass,
+    find_subclasses
+)
+
 
 DEFAULT_DATABASE = None
 
@@ -55,6 +62,7 @@ def py_type_to_sql_column(cls, **kwargs):
 
 def atom_member_to_sql_column(member, **kwargs):
     """ Convert the atom member type to an sqlalchemy table column type
+    See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
 
     """
     if isinstance(member, api.Str):
@@ -155,8 +163,6 @@ def create_table(model, **metadata):
     a column for each member.
 
     """
-    if not issubclass(model, Model):
-        raise TypeError("Only Models are supported")
     name = model.__model__
     metadata = sa.MetaData(**metadata)
     members = model.members()
@@ -244,7 +250,7 @@ class SQLTableProxy(Atom):
         async def wrapped(*args, **kwargs):
             r = attr(*args, **kwargs)
             binding = self.table.bind
-            return await binding.run_until_current()
+            return await binding.wait()
         return wrapped
 
     @property
@@ -280,7 +286,7 @@ class SQLBinding(Atom):
     _queue = ContainerList()
 
     #: Dialect name
-    name = api.Unicode()
+    name = Str()
 
     table = Instance(sa.Table)
 
@@ -328,10 +334,7 @@ class SQLBinding(Atom):
         self._queue.append((object_, multiparams, params))
         return self
 
-    def _observe__queue(self, change):
-        print(change)
-
-    async def run_until_current(self):
+    async def wait(self):
         engine = self.manager.database
         result = None
         async with engine.acquire() as conn:
@@ -341,13 +344,42 @@ class SQLBinding(Atom):
         return result
 
 
-class SQLModel(Model):
+class SQLMeta(ModelMeta):
+    """ Both the pk and _id are aliases to the primary key
+
+    """
+    def __new__(meta, name, bases, dct):
+        cls = ModelMeta.__new__(meta, name, bases, dct)
+
+        members = cls.members()
+
+        # If a pk field is defined use that insetad of _id
+        pk = None
+        for m in members.values():
+            if m.name == '_id':
+                continue
+            if m.metadata and m.metadata.get('primary_key'):
+                pk = m
+                break
+        if pk:
+            cls._id = pk
+            members['_id'] = cls._id
+            cls.__fields__ = tuple((f for f in cls.__fields__ if f != '_id'))
+
+        # Set the pk name
+        cls.__pk__ = cls._id.name
+
+        return cls
+
+
+class SQLModel(with_metaclass(SQLMeta, Model)):
     """ A model that can be saved and restored to and from a database supported
     by sqlalchemy.
 
     """
-    #: ID of this object in the database
-    _id = Typed(int).tag(primary_key=True, store=True)
+
+    #: If no other member is tagged with primary_key=True this is used
+    _id = Typed(int).tag(store=True, primary_key=True)
 
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
@@ -361,10 +393,12 @@ class SQLModel(Model):
         state = self.__getstate__()
         state.pop('__model__', None)
         state.pop('__ref__', None)
+        state.pop('_id', None)
         table = db.table
         async with db.engine.acquire() as conn:
             if self._id is not None:
-                table.update().where(table.c._id==self._id).values(**state)
+                q = table.update().where(
+                        table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
             else:
                 q = table.insert().values(**state)
@@ -377,8 +411,8 @@ class SQLModel(Model):
         """ Alias to delete this object in the database """
         db = self.objects
         table = db.table
-        if self._id:
+        if self._id is not None:
             async with db.engine.acquire() as conn:
-                q = table.delete().where(table.c._id==self._id)
+                q = table.delete().where(table.c[self.__pk__] == self._id)
                 await conn.execute(q)
                 await conn.execute('commit')
