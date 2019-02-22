@@ -14,7 +14,7 @@ import datetime
 import sqlalchemy as sa
 from functools import wraps
 from atom import api
-from atom.api import Atom, ContainerList, Int, Dict, Instance, Typed
+from atom.api import Atom, Subclass, ContainerList, Int, Dict, Instance, Typed
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
@@ -170,9 +170,7 @@ class SQLModelSerializer(ModelSerializer):
     """
     async def get_object_state(self, obj, _id):
         ModelType = obj.__class__
-        result = await ModelType.objects.select('*').where(_id=_id)
-        # Convert the result to a dict
-        return result
+        return await ModelType.objects.get(_id=_id)
 
     def _default_registry(self):
         return {m.__model__: m for m in find_subclasses(SQLModel)}
@@ -211,7 +209,7 @@ class SQLModelManager(ModelManager):
             table = self.tables[cls] = create_table(cls)
         table = self.tables[cls]
         table.metadata.bind = SQLBinding(manager=self, table=table)
-        return SQLTableProxy(table=table)
+        return SQLTableProxy(table=table, model=cls)
 
     def get_database(self):
         db = DEFAULT_DATABASE
@@ -237,6 +235,7 @@ class SQLModelManager(ModelManager):
 
 class SQLTableProxy(Atom):
     table = Instance(sa.Table)
+    model = Subclass(Model)
 
     def __getattr__(self, name):
         attr = getattr(self.table, name)
@@ -247,6 +246,28 @@ class SQLTableProxy(Atom):
             binding = self.table.bind
             return await binding.run_until_current()
         return wrapped
+
+    @property
+    def engine(self):
+        return self.table.bind.manager.database
+
+    async def execute(self, *args, **kwargs):
+        async with self.engine.acquire() as conn:
+            return await conn.execute(*args, **kwargs)
+
+    async def get(self, **filters):
+        async with self.engine.acquire() as conn:
+            table = self.table
+            q = table.select().where(
+                *(table.c[k] == v for k, v in filters.items()))
+            r = await self.execute(q)
+            row = await r.fetchone()
+            if row is None:
+                return
+            state = {k: v for k, v in zip(row.keys(), row.values())}
+            state['__model__'] = self.model.__model__
+            return state
+
 
 
 class SQLBinding(Atom):
@@ -296,7 +317,6 @@ class SQLBinding(Atom):
         kwargs["checkfirst"] = False
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
-        print((entity, self.dialect, node))
         return self
 
     def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
@@ -312,10 +332,6 @@ class SQLBinding(Atom):
     def _observe__queue(self, change):
         print(change)
 
-    @property
-    def has_pending(self):
-        return bool(self._queue)
-
     async def run_until_current(self):
         engine = self.manager.database
         result = None
@@ -326,38 +342,13 @@ class SQLBinding(Atom):
         return result
 
 
-#class SQLBinding(Atom):
-
-
-    #def _run_visitor(self, *args, **kwargs):
-        #""" Binding that defers all calls into a queue then invokes
-        #them all async
-
-        #"""
-
-    #async def create_table(self):
-        #async with self.manager.database.acquire() as conn:
-            #return await conn.execute(self.table.metadata.create_all(conn))
-
-    #async def filter(self, **kwargs):
-        #async with self.manager.database.acquire() as conn:
-            #return await conn.execute(self.table.filter(**kwargs))
-
-    #async def drop_table(self):
-        #async with self.manager.database.acquire() as conn:
-            #This can't be paramertized? WTF SQL
-            #name = self.table.name
-            #return await conn.execute('DROP TABLE IF EXISTS %s;' % name)
-
-
-
 class SQLModel(Model):
     """ A model that can be saved and restored to and from a database supported
     by sqlalchemy.
 
     """
     #: ID of this object in the database
-    _id = Int().tag(primary_key=True)
+    _id = Typed(int).tag(primary_key=True, store=True)
 
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
@@ -367,17 +358,28 @@ class SQLModel(Model):
 
     async def save(self):
         """ Alias to delete this object to the database """
-        db  = self.objects
+        db = self.objects
         state = self.__getstate__()
-        if self._id is not None:
-            return await db.insert({'_id': self._id}, state, upsert=True)
-        else:
-            r = await db.execute(self.table.insert().values(state))
-            self._id = r.inserted_id
+        state.pop('__model__', None)
+        state.pop('__ref__', None)
+        table = db.table
+        async with db.engine.acquire() as conn:
+            if self._id is not None:
+                table.update().where(table.c._id==self._id).values(**state)
+                r = await conn.execute(q)
+            else:
+                q = table.insert().values(**state)
+                r = await conn.execute(q)
+                self._id = r.lastrowid
+            await conn.execute('commit')
             return r
 
     async def delete(self):
         """ Alias to delete this object in the database """
         db = self.objects
+        table = db.table
         if self._id:
-            return await db.excute(db.table.delete().where(_id=self._id))
+            async with db.engine.acquire() as conn:
+                q = table.delete().where(table.c._id==self._id)
+                await conn.execute(q)
+                await conn.execute('commit')

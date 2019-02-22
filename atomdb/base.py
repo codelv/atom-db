@@ -247,8 +247,7 @@ class ModelMeta(AtomMeta):
         if '__fields__' not in dct:
             cls.__fields__ = tuple((
                 m.name for m in cls.members().values()
-                if not m.name.startswith("_") and
-                (not m.metadata or m.metadata.get('store', True))
+                if (m.metadata or {}).get('store', not m.name.startswith("_"))
             ))
 
         # Model name used so the serializer knows what class to recreate

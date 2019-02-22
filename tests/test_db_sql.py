@@ -101,7 +101,7 @@ async def test_drop_create_table(db):
 
 
 @pytest.mark.asyncio
-async def est_simple_save_restore_delete(db):
+async def test_simple_save_restore_delete(db):
     try:
         await User.objects.drop()
     except Exception as e:
@@ -115,7 +115,7 @@ async def est_simple_save_restore_delete(db):
     assert user._id is not None
 
     # Restore
-    state = await User.objects.find_one({'name': user.name})
+    state = await User.objects.get(name=user.name)
     assert state
 
     u = await User.restore(state)
@@ -126,7 +126,7 @@ async def est_simple_save_restore_delete(db):
 
     # Delete
     await user.delete()
-    state = await User.objects.find_one({"name": user.name})
+    state = await User.objects.get(name=user.name)
     assert not state
 
 
