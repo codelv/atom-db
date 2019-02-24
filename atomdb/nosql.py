@@ -22,9 +22,21 @@ class NoSQLModelSerializer(ModelSerializer):
     will automatically save and restore references where present.
 
     """
-    async def get_object_state(self, obj, _id):
+    async def get_object_state(self, obj, state, scope):
         ModelType = obj.__class__
-        return await ModelType.objects.find_one({'_id': _id})
+        return await ModelType.objects.find_one({'_id': state['_id']})
+
+    def flatten_object(self, obj, scope):
+        ref = obj.__ref__
+        if ref in scope:
+            return {'__ref__': ref, '__model__': obj.__model__}
+        else:
+            scope[ref] = obj
+        state = obj.__getstate__(scope)
+        _id = state.get("_id")
+        return {'_id': _id,
+                '__ref__': ref,
+                '__model__': state['__model__']} if _id else state
 
     def _default_registry(self):
         return {m.__model__: m for m in find_subclasses(NoSQLModel)}

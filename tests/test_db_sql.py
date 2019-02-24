@@ -1,12 +1,13 @@
 import os
 import re
 import pytest
+import random
 import aiomysql
 import atomdb.sql
 import sqlalchemy as sa
 from aiomysql.sa import create_engine
 from atom.api import *
-from atomdb.sql import SQLModel, SQLModelManager
+from atomdb.sql import SQLModel, SQLModelManager, Relation
 from datetime import datetime, date, time
 from faker import Faker
 from pprint import pprint
@@ -27,20 +28,31 @@ class User(SQLModel):
     active = Bool()
     age = Int()
     hashed_password = Bytes()
+    settings = Dict()
+
+
+class Job(SQLModel):
+    name = Unicode().tag(length=64)
+    roles = Relation(lambda: JobRole)
+
+
+class JobRole(SQLModel):
+    name = Unicode().tag(length=64)
+    job = Instance(Job)
 
 
 class Image(SQLModel):
-    name = Unicode()
-    path = Unicode()
+    name = Unicode().tag(length=100)
+    path = Unicode().tag(length=200)
     metadata = Dict()
 
 
 class Page(SQLModel):
-    title = Str()
+    title = Str().tag(length=60)
     status = Enum('preview', 'live')
     body = Unicode().tag(type=sa.UnicodeText())
     author = Instance(User)
-    images = List(Image)
+    images = List(Instance(Image))
     related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
     rating = Float()
     visits = Long()
@@ -56,14 +68,14 @@ class Comment(SQLModel):
     page = Instance(Page)
     author = Instance(User)
     status = Enum('pending', 'approved')
-    body = Unicode()
+    body = Unicode().tag(type=sa.UnicodeText())
     reply_to = ForwardInstance(lambda: Comment).tag(nullable=True)
     when = Instance(time)
 
 
 def test_build_tables():
     # Trigger table creation
-    SQLModelManager.instance().tables
+    SQLModelManager.instance().create_tables()
 
 
 def test_custom_table_name():
@@ -156,19 +168,54 @@ async def test_simple_save_restore_delete(db):
 @pytest.mark.asyncio
 async def test_query(db):
     await User.objects.create()
-    async for row in User.objects.all():
+
+    # Create second user
+    for i in range(10):
+        user = User(name=faker.name(), email=faker.email(), active=True)
+        await user.save()
+
+    for row in await User.objects.all():
         print(row)
 
-    async for row in User.objects.filter(name="Bob"):
+    for row in await User.objects.filter(name=user.name):
         print(row)
 
 
 @pytest.mark.asyncio
-async def est_nested_save_restore(engine):
-    await Image.objects.drop()
-    await User.objects.drop()
-    await Page.objects.drop()
-    await Comment.objects.drop()
+async def test_query_many_to_one(db):
+    await Job.objects.create()
+    await JobRole.objects.create()
+
+    jobs = []
+
+    for i in range(5):
+        job = Job(name=faker.job())
+        await job.save()
+        jobs.append(job)
+
+        for i in range(random.randint(1, 5)):
+            role = JobRole(name=faker.bs(), job=job)
+            await role.save()
+
+    loaded = []
+    q = Job.table.join(JobRole.table).select(use_labels=True)
+
+    for row in await Job.objects.fetchall(q):
+        #: TODO: combine the joins back up
+        job = await Job.restore(row)
+        for role in job.roles:
+            assert role.job == job
+        loaded.append(job)
+    #assert len(jobs) == len(loaded)
+
+
+@pytest.mark.skip(reason="Not implemented")
+@pytest.mark.asyncio
+async def test_nested_save_restore(db):
+    await Image.objects.create()
+    await User.objects.create()
+    await Page.objects.create()
+    await Comment.objects.create()
 
     authors = [
         User(name=faker.name(), active=True) for i in range(2)
@@ -227,8 +274,9 @@ async def est_nested_save_restore(engine):
                 assert reply.page._id == p._id
 
 
+@pytest.mark.skip(reason="Not implemented")
 @pytest.mark.asyncio
-async def est_circular(db):
+async def test_circular(db):
     # Test that a circular reference is properly stored as a reference
     # and doesn't create an infinite loop
     await Page.objects.drop()

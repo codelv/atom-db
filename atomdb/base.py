@@ -69,16 +69,7 @@ class ModelSerializer(Atom):
 
         # Handle circular reference
         if isinstance(v, Model):
-            ref = v.__ref__
-            if ref in scope:
-                return {'__ref__': ref, '__model__': v.__model__}
-            else:
-                scope[ref] = v
-            state =  v.__getstate__(scope)
-            _id = state.get("_id")
-            return {'_id': _id,
-                    '__ref__': ref,
-                    '__model__': state['__model__']} if _id else state
+            return v.serializer.flatten_object(v, scope)
         elif isinstance(v, (list, tuple, set)):
             return [flatten(item, scope) for item in v]
         elif isinstance(v, (dict, _DictProxy)):
@@ -86,6 +77,25 @@ class ModelSerializer(Atom):
                     for k, item in v.items()}
         # TODO: Handle other object types
         return v
+
+    def flatten_object(self, obj, scope):
+        """ Serialize a model for entering into the database
+
+        Parameters
+        ----------
+        obj: Model
+            The object to unflatten
+        scope: Dict
+            The scope of references available for circular lookups
+
+        Returns
+        -------
+        result: Object
+            The flattened object
+
+        """
+        raise NotImplementedError
+
 
     async def unflatten(self, v, scope=None):
         """ Convert dict or list to Models
@@ -115,18 +125,12 @@ class ModelSerializer(Atom):
             # Create the object
             name = v.get('__model__')
             if name is not None:
-                cls = self.registry.get(name)
-                if not cls:
-                    raise KeyError(f"Unknown or unregistered model: {name}")
-                # Use the classes serializer
+                cls = self.registry[name]
                 return await cls.serializer.unflatten_object(cls, v, scope)
             return {k: await unflatten(i, scope) for k, i in v.items()}
         elif isinstance(v, (list, tuple)):
             return [await unflatten(item, scope) for item in v]
         return v
-
-    def _default_registry(self):
-        raise NotImplementedError
 
     async def unflatten_object(self, cls, state, scope):
         """ Restore the object for the given class, state, and scope.
@@ -150,12 +154,12 @@ class ModelSerializer(Atom):
         ref = state.get('__ref__')
 
         # Get the object for this id, retrieve from cache if needed
-        obj, created = await self.get_or_create(cls, _id)
+        obj, created = await self.get_or_create(cls, state, scope)
 
         # Lookup the object if needed
         if created and _id is not None:
             # If a new object was created lookup the state for that object
-            state = await self.get_object_state(obj, _id)
+            state = await self.get_object_state(obj, state, scope)
             if state is None:
                 return None
 
@@ -170,7 +174,7 @@ class ModelSerializer(Atom):
             await obj.__setstate__(state, scope)
         return obj
 
-    async def get_or_create(self, cls, _id):
+    async def get_or_create(self, cls, state, scope):
         """ Get a cached object for this _id or create a new one. Subclasses
         should override this as needed to provide object caching if desired.
 
@@ -178,8 +182,10 @@ class ModelSerializer(Atom):
         ----------
         cls: Class
             The type of object expected
-        _id: Object
-            The object ID used by this ModelManager
+        state: Dict
+            Unflattened state of object to restore
+        scope: Dict
+            Scope of objects available when flattened
 
         Returns
         -------
@@ -189,15 +195,17 @@ class ModelSerializer(Atom):
         """
         return (cls.__new__(cls), True)
 
-    async def get_object_state(self, obj,  _id):
+    async def get_object_state(self, obj,  state, scope):
         """ Lookup the state needed to restore the given object id and class.
 
         Parameters
         ----------
         obj: Object
             The object created by `get_or_create`
-        _id: Object
-            The object ID used by this ModelManager
+        state: Dict
+            Unflattened state of object to restore
+        scope: Dict
+            Scope of objects available when flattened
 
         Returns
         -------
@@ -320,7 +328,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
             raise ValueError(f"Trying to use {name} state for "
                              f"{self.__model__} object")
         scope = scope or {}
-        ref = state.pop('__ref__', None)
+        ref = state.get('__ref__')
         if ref is not None:
             scope[ref] = self
         members = self.members()
