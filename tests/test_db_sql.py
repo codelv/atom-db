@@ -198,7 +198,7 @@ async def test_query_many_to_one(db):
             await role.save()
 
     loaded = []
-    q = Job.table.join(JobRole.table).select(use_labels=True)
+    q = Job.objects.table.join(JobRole.objects.table).select(use_labels=True)
 
     for row in await Job.objects.fetchall(q):
         #: TODO: combine the joins back up

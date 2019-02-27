@@ -72,6 +72,10 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
         return sa.Integer(**kwargs)
     elif issubclass(cls, float):
         return sa.Float(**kwargs)
+    elif issubclass(cls, dict):
+        return sa.JSON(**kwargs)
+    elif issubclass(cls, (tuple, list)):
+        return sa.ARRAY(**kwargs)
     elif issubclass(cls, datetime.datetime):
         return sa.DateTime(**kwargs)
     elif issubclass(cls, datetime.date):
@@ -278,9 +282,9 @@ class SQLModelManager(ModelManager):
     def create_tables(self):
         tables = {}
         for cls in find_subclasses(SQLModel):
-            table = cls.table
+            table = cls.__table__
             if table is None:
-                table = cls.table = create_table(cls, self.metadata)
+                table = cls.__table__ = create_table(cls, self.metadata)
             if not table.metadata.bind:
                 table.metadata.bind = SQLBinding(manager=self, table=table)
             tables[cls] = table
@@ -300,9 +304,9 @@ class SQLModelManager(ModelManager):
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
-        table = cls.table
+        table = cls.__table__
         if table is None:
-            table = cls.table = create_table(cls, self.metadata)
+            table = cls.__table__ = create_table(cls, self.metadata)
         return SQLTableProxy(table=table, model=cls)
 
     def get_database(self):
@@ -464,10 +468,10 @@ class SQLMeta(ModelMeta):
 
         # Set the pk name
         cls.__pk__ = cls._id.name
+        cls.__table__ = None
 
         # Will be set to the table model by manager, not done here to avoid
         # import errors that may occur
-        cls.table = None
         cls.__backrefs__ = set()
         return cls
 
@@ -492,7 +496,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         pk_label = f'{self.__model__}_{self.__pk__}'
         if pk_label in state:
             # Convert the joined tables into nested states
-            table = self.table
+            table = self.objects.table
             table_name = table.name
             pk = state[pk_label]
             ref = os.urandom(16)
@@ -535,7 +539,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             if isinstance(m, Relation):
                 state.pop(name, None)
 
-        table = self.table
+        table = self.objects.table
         async with db.engine.acquire() as conn:
             if self._id:
                 q = table.update().where(
@@ -551,7 +555,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     async def delete(self):
         """ Alias to delete this object in the database """
         db = self.objects
-        table = self.table
+        table = self.objects.table
         if self._id:
             async with db.engine.acquire() as conn:
                 q = table.delete().where(table.c[self.__pk__] == self._id)
