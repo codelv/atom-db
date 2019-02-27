@@ -561,4 +561,3 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 q = table.delete().where(table.c[self.__pk__] == self._id)
                 await conn.execute(q)
                 await conn.execute('commit')
-

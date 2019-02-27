@@ -283,6 +283,10 @@ class Model(with_metaclass(ModelMeta, Atom)):
     #: Do NOT use python's id() as these are reused and can cause conflicts
     __ref__ = Bytes(factory=lambda: os.urandom(16))
 
+    #: State set when restored from the database. This should be updated
+    #: upon successful save and never modified
+    __state__ = Typed(dict).tag(store=False)
+
     # ==========================================================================
     # Serialization API
     # ==========================================================================
@@ -345,6 +349,9 @@ class Model(with_metaclass(ModelMeta, Atom)):
                     order = 1000
                 valid_keys.append((order, k))
         valid_keys.sort()
+
+        # Save initial database state
+        self.__state__ = dict(state)
 
         for order, k in valid_keys:
             v = state[k]
