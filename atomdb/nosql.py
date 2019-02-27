@@ -14,9 +14,6 @@ from atom.api import Instance
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
 
 
-DEFAULT_DATABASE = None
-
-
 class NoSQLModelSerializer(ModelSerializer):
     """ Handles serializing and deserializing of Model subclasses. It
     will automatically save and restore references where present.
@@ -58,11 +55,9 @@ class NoSQLModelManager(ModelManager):
             return self  # Only return the collection when used from a Model
         return self.database[cls.__model__]
 
-    def get_database(self):
-        db = DEFAULT_DATABASE
-        if db is None:
-            raise EnvironmentError("No database has been set")
-        return db
+    def _default_database(self):
+        raise EnvironmentError("No database has been set. Use "
+                               "NoSQLModelManager.instance().database = <db>")
 
 
 class NoSQLModel(Model):

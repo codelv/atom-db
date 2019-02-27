@@ -1,7 +1,7 @@
 import pytest
 import atomdb.nosql
 from atom.api import *
-from atomdb.nosql import NoSQLModel
+from atomdb.nosql import NoSQLModel, NoSQLModelManager
 from faker import Faker
 from motor.motor_asyncio import AsyncIOMotorClient
 from pprint import pprint
@@ -46,15 +46,14 @@ class Comment(NoSQLModel):
 def db(event_loop):
     client = AsyncIOMotorClient(io_loop=event_loop)
     db = client.enaml_web_test_db
-    atomdb.nosql.DEFAULT_DATABASE = db
+    mgr = NoSQLModelManager.instance()
+    mgr.database = db
     yield db
 
 
 @pytest.mark.asyncio
 async def test_db_manager(db):
-    from atomdb.nosql import NoSQLModelManager
     mgr = NoSQLModelManager.instance()
-    assert db == mgr.get_database()
 
     # Check non-model access, it should not return the collection
     class NotModel(Atom):
@@ -62,12 +61,12 @@ async def test_db_manager(db):
     assert NotModel.objects == mgr
 
     # Now change it
-    atomdb.nosql.DEFAULT_DATABASE = None
+    del mgr.database
     with pytest.raises(EnvironmentError):
         await User.objects.find().to_list(length=10)
 
     # And restore
-    atomdb.nosql.DEFAULT_DATABASE = db
+    mgr.database = db
     await User.objects.find().to_list(length=10)
 
 

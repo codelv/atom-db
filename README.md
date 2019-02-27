@@ -37,7 +37,13 @@ Just define models using atom members, but subclass the NoSQLModel.
 ```python
 
 from atom.api import Unicode, Int, Instance, List
-from atomdb.nosql import NoSQLModel
+from atomdb.nosql import NoSQLModel, NoSQLModelManager
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# Set DB
+client = AsyncIOMotorClient()
+mgr = NoSQLModelManager.instance()
+mgr.database = client.test_db
 
 
 class Group(NoSQLModel):
@@ -108,7 +114,6 @@ Just define models using atom members, but subclass the SQLModel.
 Tag members with information needed for sqlalchemy tables, ex
 `Str().tag(length=40)` will make a `sa.String(40)`.
 See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
-
 
 
 

@@ -19,6 +19,7 @@ from atom.atom import AtomMeta, with_metaclass
 from atom.dict import _DictProxy
 from pprint import pformat
 
+
 logger = logging.getLogger('atomdb')
 
 
@@ -235,11 +236,11 @@ class ModelManager(Atom):
             ModelManager._instances[cls] = cls()
         return ModelManager._instances[cls]
 
-    def get_database(self):
-        raise NotImplementedError
-
     #: Used to access the database
-    database = Property(lambda self: self.get_database())
+    database = Value()
+
+    def _default_database(self):
+        raise NotImplementedError
 
     def __get__(self, obj, cls=None):
         """ Handle objects from the class that owns the manager. Subclasses

@@ -28,9 +28,6 @@ from .base import (
 )
 
 
-
-DEFAULT_DATABASE = None
-
 # kwargs reserved for sqlalchemy table columns
 COLUMN_KWARGS = (
     'autoincrement', 'default', 'doc', 'key', 'index', 'info', 'nullable',
@@ -292,9 +289,11 @@ class SQLModelManager(ModelManager):
 
     def _default_url(self):
         env = os.environ
-        url = env.get('DATABASE_URL', env.get('MYSQL_URL'))
+        url = env.get('DATABASE_URL',
+                      env.get('POSTGRES_URL',
+                              env.get('MYSQL_URL')))
         if url is None:
-            raise EnvironmentError("No DATABASE_URL has been set")
+            raise EnvironmentError("No database url was found")
         return sa.engine.url.make_url(url)
 
     def __get__(self, obj, cls=None):
@@ -309,11 +308,9 @@ class SQLModelManager(ModelManager):
             table = cls.__table__ = create_table(cls, self.metadata)
         return SQLTableProxy(table=table, model=cls)
 
-    def get_database(self):
-        db = DEFAULT_DATABASE
-        if db is None:
-            raise EnvironmentError("No database engine has been set")
-        return db
+    def _default_database(self):
+        raise EnvironmentError("No database engine has been set. Use "
+                               "SQLModelManager.instance().database = <db>")
 
     def get_dialect(self, **kwargs):
         dialect_cls = self.url.get_dialect()
@@ -325,7 +322,10 @@ class SQLModelManager(ModelManager):
 
 
 class SQLTableProxy(Atom):
+    #: Table this is a proxy to
     table = Instance(sa.Table)
+
+    #: Model which owns the table
     model = Subclass(Model)
 
     @property

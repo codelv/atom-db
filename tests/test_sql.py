@@ -44,7 +44,7 @@ class JobRole(SQLModel):
 class Image(SQLModel):
     name = Unicode().tag(length=100)
     path = Unicode().tag(length=200)
-    metadata = Dict()
+    metadata = Typed(dict).tag(nullable=True)
 
 
 class Page(SQLModel):
@@ -104,7 +104,8 @@ async def db(event_loop):
             await c.execute('CREATE DATABASE %s;' % db)
 
     async with create_engine(db=db, **params) as engine:
-        atomdb.sql.DEFAULT_DATABASE = engine
+        mgr = SQLModelManager.instance()
+        mgr.database = engine
         yield engine
 
 

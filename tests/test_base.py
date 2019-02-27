@@ -13,7 +13,7 @@ async def test_manager():
 
     # Not implemented for abstract manager
     with pytest.raises(NotImplementedError):
-        mgr.get_database()
+        mgr.database
 
     # Not implemented for abstract manager
     with pytest.raises(NotImplementedError):
