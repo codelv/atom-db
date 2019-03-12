@@ -117,6 +117,41 @@ control, you can tag the member to specify the column type with
 `type=sa.<type>` or specify the full column definition with
 `column=sa.Column(...)`.  See the tests for examples.
 
+You can tag a member with `primary_key=True` to make it the pk. atomdb will
+look for these and assign it to the `__pk__` of the class. If none is specified
+it will create and use `_id` as the primary key. If another member is specified
+as the pk, the `_id` member will be redefined to alias the actual primary key.
+
+Table names can be redefined by setting the `__model__ = "<table name>"`, by
+default it uses the fqdn of the class.
+
+#### DB engine
+
+Before accessing the DB you must assign a "database engine" to the manager
+like this.
+
+```python
+import re
+from aiomysql.sa import create_engine
+from atomdb.sql import SQLModelManager
+
+# Parse the DB url
+m = re.match(r'mysql://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
+user, pwd, host, port, db = m.groups()
+
+# Create the engine
+engine = await create_engine(
+    db=db, user=user, password=pwd, host=host, port=port)
+
+# Assign it to the manager
+mgr = SQLModelManager.instance()
+mgr.database = engine
+
+
+```
+
+This will then be used  by the manager to execute queries.
+
 
 #### Table creation / dropping
 
@@ -153,21 +188,21 @@ For example:
 
 ```python
 
-user, created = await User.objects.get_or_create(
-        name=faker.name(), email=faker.email(), age=21, active=True)
+john, created = await User.objects.get_or_create(
+        name="John Doe", email="jon@example.com", age=21, active=True)
 assert created
 
-user2, created = await User.objects.get_or_create(
-        name=faker.name(), email=faker.email(), age=48, active=False,
+jane, created = await User.objects.get_or_create(
+        name="Jane Doe", email="jane@example.com", age=48, active=False,
         rating=10.0)
 assert created
 
 # Startswith
-u = await User.objects.get(name__startswith=user.name[0])
-assert u.name == user.name
+u = await User.objects.get(name__startswith="John")
+assert u.name == john.name
 
 # In query
-users = await User.objects.filter(name__in=[user.name, user2.name])
+users = await User.objects.filter(name__in=[john.name, jane.name])
 assert len(users) == 2
 
 # Is query
