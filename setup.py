@@ -24,7 +24,8 @@ setup(
     requires=['atom'],
     install_requires=['atom'],
     optional_requires=[
-        'sqlalchemy', 'motor', 'txmongo'  # database support
+        'sqlalchemy', 'aiomysql', 'aiopg',  # sql database support
+        'motor', 'txmongo'  # nosql database support
     ],
     packages=find_packages(),
 )

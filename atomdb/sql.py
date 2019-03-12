@@ -350,35 +350,123 @@ class SQLTableProxy(Atom):
         return table.bind.wait()
 
     async def execute(self, *args, **kwargs):
-        async with self.engine.acquire() as conn:
+        async with self.connection() as conn:
             return await conn.execute(*args, **kwargs)
 
-    def all(self):
-        return self.filter()
-
     async def fetchall(self, query):
-        async with self.engine.acquire() as conn:
-            r = await self.execute(query)
+        """ Fetch all results for the query.
+
+        Parameters
+        ----------
+        query: String or Query
+            The query to execute
+
+        Returns
+        -------
+        rows; List
+            List of rows returned, NOT objects
+
+        """
+        async with self.connection() as conn:
+            r = await conn.execute(query)
             return await r.fetchall()
 
+    async def fetchmany(self, query, size=None):
+        async with self.connection() as conn:
+            r = await conn.execute(query)
+            return await r.fetchmany(size)
+
     async def fetchone(self, query):
-        async with self.engine.acquire() as conn:
-            r = await self.execute(query)
+        async with self.connection() as conn:
+            r = await conn.execute(query)
             return await r.fetchone()
 
-    def filter(self, **filters):
+    async def filter(self, **filters):
+        restore = self.model.restore
+        q = self.query(**filters)
+        return [await restore(row) for row in await self.fetchall(q)]
+
+    async def all(self):
+        return await self.filter()
+
+    async def get(self, **filters):
+        row = await self.fetchone(self.query(**filters))
+        if row:
+            return await self.model.restore(row)
+
+    async def get_or_create(self, **filters):
+        """ Get or create a model matching the given criteria
+
+        Parameters
+        ----------
+        filters: Dict
+            The filters to use to retrieve the object
+
+        Returns
+        -------
+        result: Tuple[Model, Bool]
+            A tuple of the object and a bool indicating if it was just created
+
+        """
+        obj = await self.get(**filters)
+        if obj is not None:
+            return (obj, False)
+        obj = self.model(**{k: v for k, v in filters.items() if '__' not in k})
+        await obj.save()
+        return (obj, True)
+
+    def query(self, **filters):
+        """ Build a query for the given filters.
+
+        Parameters
+        ----------
+        filters: Dict
+            A dict where keys are mapped to columns and values. Use __ to
+            specify an operator. For example (date__gt=datetime.now())
+
+        Returns
+        -------
+        query: Query
+            An sqlalchemy query which an be used with execute, fetchall, etc..
+
+        References
+        ----------
+        1. https://docs.sqlalchemy.org/en/latest/core/sqlelement.html
+            ?highlight=column#sqlalchemy.sql.operators.ColumnOperators
+
+        """
         table = self.table
         q = table.select()
         if filters:
-            q = q.where(
-                *(table.c[k] == v for k, v in filters.items()))
-        return self.fetchall(q)
+            for k, v in filters.items():
+                op = 'eq'
+                if '__' in k:
+                    #: TODO: Support related lookups
+                    args = k.split('__')
+                    if len(args) > 2:
+                        raise NotImplementedError(
+                            "Related lookups are not supported, build queries"
+                            "manually using Model.objects.table.select()...")
+                    field, op = args
+                else:
+                    field = k
 
-    def get(self, **filters):
-        table = self.table
-        q = table.select().where(
-            *(table.c[k] == v for k, v in filters.items()))
-        return self.fetchone(q)
+                col = table.c[field]
+
+                if hasattr(col, op):
+                    # Like, contains, endswith, etc...
+                    q = q.where(getattr(col, op)(v))
+                elif hasattr(col, op + '_'):
+                    # in,  is, not, etc...
+                    q = q.where(getattr(col, op + '_')(v))
+                elif hasattr(col, '__%s__' % op):
+                    # eq, lt, gt, etc...
+                    q = q.where(getattr(col, '__%s__' % op)(v))
+                else:
+                    raise NotImplementedError(
+                        "%s operator is unknown or not supported. Build them"
+                        "manually using Model.objects.table.select()..." % op)
+        return q
 
 
 class SQLBinding(Atom):

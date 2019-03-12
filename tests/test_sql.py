@@ -29,6 +29,7 @@ class User(SQLModel):
     age = Int()
     hashed_password = Bytes()
     settings = Dict()
+    rating = Instance(float).tag(nullable=True)
 
 
 class Job(SQLModel):
@@ -45,6 +46,7 @@ class Image(SQLModel):
     name = Unicode().tag(length=100)
     path = Unicode().tag(length=200)
     metadata = Typed(dict).tag(nullable=True)
+    alpha = Range(low=0, high=255)
 
 
 class Page(SQLModel):
@@ -134,10 +136,8 @@ async def test_simple_save_restore_delete(db):
     assert user._id is not None
 
     # Restore
-    state = await User.objects.get(name=user.name)
-    assert state
-
-    u = await User.restore(state)
+    u = await User.objects.get(name=user.name)
+    assert u
     assert u._id == user._id
     assert u.name == user.name
     assert u.email == user.email
@@ -147,9 +147,8 @@ async def test_simple_save_restore_delete(db):
     user.active = False
     await user.save()
 
-    state = await User.objects.get(name=user.name)
-    assert state
-    u = await User.restore(state)
+    u = await User.objects.get(name=user.name)
+    assert u
     assert not u.active
 
     # Create second user
@@ -158,12 +157,10 @@ async def test_simple_save_restore_delete(db):
 
     # Delete
     await user.delete()
-    state = await User.objects.get(name=user.name)
-    assert not state
+    assert await User.objects.get(name=user.name) is None
 
     # Make sure second user still exists
-    state = await User.objects.get(name=another_user.name)
-    assert state
+    assert await User.objects.get(name=another_user.name) is not None
 
 
 @pytest.mark.asyncio
@@ -172,14 +169,70 @@ async def test_query(db):
 
     # Create second user
     for i in range(10):
-        user = User(name=faker.name(), email=faker.email(), active=True)
+        user = User(name=faker.name(), email=faker.email(), age=20, active=True)
         await user.save()
 
-    for row in await User.objects.all():
-        print(row)
+    for user in await User.objects.all():
+        print(user)
 
-    for row in await User.objects.filter(name=user.name):
-        print(row)
+    for user in await User.objects.filter(name=user.name):
+        print(user)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create(db):
+    try:
+        await User.objects.drop()
+    except Exception as e:
+        if 'Unknown table' not in str(e):
+            raise
+    await User.objects.create()
+    user, created = await User.objects.get_or_create(
+        name=faker.name(), email=faker.email())
+    assert created
+    assert user._id
+
+    u, created = await User.objects.get_or_create(
+        name=user.name, email=user.email)
+    assert u._id == user._id
+    assert not created
+
+
+@pytest.mark.asyncio
+async def test_filters(db):
+    await User.objects.create()
+    user, created = await User.objects.get_or_create(
+        name=faker.name(), email=faker.email(), age=21, active=True)
+    assert created
+
+    user2, created = await User.objects.get_or_create(
+        name=faker.name(), email=faker.email(), age=48, active=False,
+        rating=10.0)
+    assert created
+
+    # Startswith
+    u = await User.objects.get(name__startswith=user.name[0])
+    assert u.name == user.name
+
+    # In query
+    users = await User.objects.filter(name__in=[user.name, user2.name])
+    assert len(users) == 2
+
+    # Is query
+    users = await User.objects.filter(active__is=False)
+    assert len(users) == 1 and users[0].active == False
+
+    # Not query
+    users = await User.objects.filter(rating__isnot=None)
+    assert len(users) == 1 and users[0].rating is not None
+
+    # Lt query
+    users = await User.objects.filter(age__lt=30)
+    assert len(users) == 1 and users[0].age == user.age
+
+    # Not supported
+    with pytest.raises(NotImplementedError):
+        users = await User.objects.filter(age__xor=1)
 
 
 @pytest.mark.asyncio
@@ -201,13 +254,19 @@ async def test_query_many_to_one(db):
     loaded = []
     q = Job.objects.table.join(JobRole.objects.table).select(use_labels=True)
 
+    print(q)
+
+    r = await Job.objects.execute(q)
+    assert r.returns_rows
+
     for row in await Job.objects.fetchall(q):
         #: TODO: combine the joins back up
         job = await Job.restore(row)
         for role in job.roles:
             assert role.job == job
         loaded.append(job)
-    #assert len(jobs) == len(loaded)
+
+    assert len(await Job.objects.fetchmany(q, size=2)) == 2
 
 
 @pytest.mark.skip(reason="Not implemented")

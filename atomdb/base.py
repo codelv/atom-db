@@ -285,7 +285,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
 
     #: State set when restored from the database. This should be updated
     #: upon successful save and never modified
-    __state__ = Typed(dict).tag(store=False)
+    #:__state__ = Typed(dict).tag(store=False)
 
     # ==========================================================================
     # Serialization API
@@ -351,7 +351,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
         valid_keys.sort()
 
         # Save initial database state
-        self.__state__ = dict(state)
+        # self.__state__ = dict(state)
 
         for order, k in valid_keys:
             v = state[k]
