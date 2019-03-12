@@ -105,16 +105,110 @@ with `.tag(store=False)`.
 
 ### SQL with aiomysql / aiopg
 
-> SQL support is currently a WIP. Currently only basic operations like
-creation of tables, dropping tables, and simple queries are working
-(no joins work yet).
-
 Just define models using atom members, but subclass the SQLModel.
 
 Tag members with information needed for sqlalchemy tables, ex
 `Str().tag(length=40)` will make a `sa.String(40)`.
-See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
+See https://docs.sqlalchemy.org/en/latest/core/type_basics.html. Tagging with
+`store=False` will make the member be excluded from the db.
 
+atomdb will attempt to determine the proper column type, but if you need more
+control, you can tag the member to specify the column type with
+`type=sa.<type>` or specify the full column definition with
+`column=sa.Column(...)`.  See the tests for examples.
+
+
+#### Table creation / dropping
+
+Once your tables are defined as atom models, create and drop tables using the
+async wrappers on top of sqlalchemy's engine.
+
+```python
+
+from atomdb.sql import SQLModel, SQLModelManager
+
+# Call create_tables to create sqlalchemy tables. This does NOT write them to
+# the db but ensures that all ForeignKey relations are created
+SQLModelManager.instance().create_tables()
+
+# Now actually drop/create for each of your models
+
+# Drop the table for this model (will raise sqlalchemy's error if it doesn't exist)
+await User.objects.drop()
+
+# Create the user table
+await User.objects.create()
+
+
+```
+
+
+#### ORM like queries
+
+Only very basic ORM style queries are implemented for common use cases. These
+are `get`, `get_or_create`, `filter`, and `all`. These all accept
+"django style" queries using `<name>=<value>` or `<name>__<op>=<value>`.
+
+For example:
+
+```python
+
+user, created = await User.objects.get_or_create(
+        name=faker.name(), email=faker.email(), age=21, active=True)
+assert created
+
+user2, created = await User.objects.get_or_create(
+        name=faker.name(), email=faker.email(), age=48, active=False,
+        rating=10.0)
+assert created
+
+# Startswith
+u = await User.objects.get(name__startswith=user.name[0])
+assert u.name == user.name
+
+# In query
+users = await User.objects.filter(name__in=[user.name, user2.name])
+assert len(users) == 2
+
+# Is query
+users = await User.objects.filter(active__is=False)
+assert len(users) == 1 and users[0].active == False
+
+```
+
+See [sqlachemy's ColumnElement](https://docs.sqlalchemy.org/en/latest/core/sqlelement.html?highlight=column#sqlalchemy.sql.expression.ColumnElement)
+for which queries can be used in this way.  Also the tests check that these
+actually work as intended.
+
+
+#### Advanced / raw queries
+
+For more advanced queries using joins, etc.. you must build the query with
+sqlalchemy then execute it. The `sa.Table` for an atom model can be retrieved
+using `Model.objects.table` on which you can use select, where, etc... to build
+up whatever query you need.
+
+Then use `fetchall`, `fetchone`, `fetchmany`, or `execute` to do the query.
+
+These methods do NOT return an object but the row from the database so they
+must manually be restored.
+
+When joining you'll usually want to pass `use_labels=True`.  For example:
+
+```python
+
+q = Job.objects.table.join(JobRole.objects.table).select(use_labels=True)
+
+for row in await Job.objects.fetchall(q):
+    # Restore each manually, it handles pulling out the fields that are it's own
+    job = await Job.restore(row)
+    role = await JobRole.restore(row)
+
+```
+
+Depending on the relationships, you may need to then post-process these so they
+can be accessed in a more pythonic way. This is trade off between complexity
+and ease of use.
 
 
 ### Contributing
