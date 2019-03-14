@@ -178,6 +178,14 @@ async def test_query(db):
     for user in await User.objects.filter(name=user.name):
         print(user)
 
+    # Delete one
+    await User.objects.delete(name=user.name)
+    assert len(await User.objects.all()) == 9
+
+    # Delete them all
+    await User.objects.delete(active=True)
+    assert len(await User.objects.all()) == 0
+
 
 @pytest.mark.asyncio
 async def test_get_or_create(db):

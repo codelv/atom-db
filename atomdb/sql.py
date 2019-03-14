@@ -62,7 +62,7 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     if issubclass(cls, Model):
         name = f'{cls.__model__}.{cls.__pk__}'
         cls.__backrefs__.add((model, member))
-        return (sa.Integer, sa.ForeignKey(name))
+        return (sa.Integer, sa.ForeignKey(name, **kwargs))
     elif issubclass(cls, str):
         return sa.String(**kwargs)
     elif issubclass(cls, int):
@@ -382,15 +382,62 @@ class SQLTableProxy(Atom):
             return await r.fetchone()
 
     async def filter(self, **filters):
+        """ Selects the objects matching the given filters
+
+        Parameters
+        ----------
+        filters: Dict
+            The filters to select which objects to delete
+
+        Returns
+        -------
+        result: List[Model]
+            A list of objects matching the response
+
+        """
         restore = self.model.restore
-        q = self.query(**filters)
+        q = self.query(self.table.select(), **filters)
         return [await restore(row) for row in await self.fetchall(q)]
+
+    async def delete(self, **filters):
+        """ Delete the objects matching the given filters
+
+        Parameters
+        ----------
+        filters: Dict
+            The filters to select which objects to delete
+
+        Returns
+        -------
+        result: Response
+            The execute response
+
+        """
+        q = self.query(self.table.delete(), **filters)
+        async with self.connection() as conn:
+            r = await conn.execute(q)
+            await conn.execute('commit')
+            return r
 
     async def all(self):
         return await self.filter()
 
     async def get(self, **filters):
-        row = await self.fetchone(self.query(**filters))
+        """ Get a model matching the given criteria
+
+        Parameters
+        ----------
+        filters: Dict
+            The filters to use to retrieve the object
+
+        Returns
+        -------
+        result: Model or None
+            The model matching the query or None.
+
+        """
+        q = self.query(self.table.select(), **filters)
+        row = await self.fetchone(q)
         if row:
             return await self.model.restore(row)
 
@@ -415,11 +462,15 @@ class SQLTableProxy(Atom):
         await obj.save()
         return (obj, True)
 
-    def query(self, **filters):
-        """ Build a query for the given filters.
+    def query(self, __q__=None, **filters):
+        """ Build a django-style query by adding a where clause to the given
+        query.
 
         Parameters
         ----------
+        __q__: Query
+            The query to add a where clause to. Will default to select if not
+            given.
         filters: Dict
             A dict where keys are mapped to columns and values. Use __ to
             specify an operator. For example (date__gt=datetime.now())
@@ -435,37 +486,38 @@ class SQLTableProxy(Atom):
             ?highlight=column#sqlalchemy.sql.operators.ColumnOperators
 
         """
-        table = self.table
-        q = table.select()
-        if filters:
-            for k, v in filters.items():
-                op = 'eq'
-                if '__' in k:
-                    #: TODO: Support related lookups
-                    args = k.split('__')
-                    if len(args) > 2:
-                        raise NotImplementedError(
-                            "Related lookups are not supported, build queries"
-                            "manually using Model.objects.table.select()...")
-                    field, op = args
-                else:
-                    field = k
-
-                col = table.c[field]
-
-                if hasattr(col, op):
-                    # Like, contains, endswith, etc...
-                    q = q.where(getattr(col, op)(v))
-                elif hasattr(col, op + '_'):
-                    # in,  is, not, etc...
-                    q = q.where(getattr(col, op + '_')(v))
-                elif hasattr(col, '__%s__' % op):
-                    # eq, lt, gt, etc...
-                    q = q.where(getattr(col, '__%s__' % op)(v))
-                else:
+        q = self.table.select() if __q__ is None else __q__
+        if not filters:
+            return q
+        columns = self.table.c
+        for k, v in filters.items():
+            op = 'eq'
+            if '__' in k:
+                #: TODO: Support related lookups
+                args = k.split('__')
+                if len(args) > 2:
                     raise NotImplementedError(
-                        "%s operator is unknown or not supported. Build them"
-                        "manually using Model.objects.table.select()..." % op)
+                        "Related lookups are not supported, build queries"
+                        "manually using Model.objects.table.select()...")
+                field, op = args
+            else:
+                field = k
+
+            col = columns[field]
+
+            if hasattr(col, op):
+                # Like, contains, endswith, etc...
+                q = q.where(getattr(col, op)(v))
+            elif hasattr(col, op + '_'):
+                # in,  is, not, etc...
+                q = q.where(getattr(col, op + '_')(v))
+            elif hasattr(col, '__%s__' % op):
+                # eq, lt, gt, etc...
+                q = q.where(getattr(col, '__%s__' % op)(v))
+            else:
+                raise NotImplementedError(
+                    "%s operator is unknown or not supported. Build them"
+                    "manually using Model.objects.table.select()..." % op)
         return q
 
 
@@ -616,7 +668,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         await super().__setstate__(state, scope)
 
     async def save(self):
-        """ Alias to delete this object to the database """
+        """ Alias to save this object to the database """
         db = self.objects
         state = self.__getstate__()
         state.pop('__model__', None)
@@ -626,6 +678,9 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         for name, m in self.members().items():
             if isinstance(m, Relation):
                 state.pop(name, None)
+            elif m.metadata and 'name' in m.metadata and name in state:
+                # If any column names were redefined use those instead
+                state[m.metadata['name']] = state.pop(name)
 
         table = self.objects.table
         async with db.engine.acquire() as conn:
