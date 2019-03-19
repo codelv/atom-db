@@ -607,7 +607,7 @@ class SQLMeta(ModelMeta):
             cls.__fields__ = tuple((f for f in cls.__fields__ if f != '_id'))
 
         # Set the pk name
-        cls.__pk__ = cls._id.name
+        cls.__pk__ = (cls._id.metadata or {}).get('name', cls._id.name)
         cls.__table__ = None
 
         # Will be set to the table model by manager, not done here to avoid
@@ -644,13 +644,15 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
             # Pull known
             for m in self.members().values():
-                key = f'{table_name}_{m.name}'
+                field_name = (m.metadata or {}).get('name', m.name)
+                key = f'{table_name}_{field_name}'
                 if isinstance(m, Relation):
                     rel = m.to
                     rel_table_name = rel.__model__
                     nested_state = {}
                     for sm in rel.members().values():
-                        key = f'{rel_table_name}_{sm.name}'
+                        rel_field = (sm.metadata or {}).get('name', sm.name)
+                        key = f'{rel_table_name}_{rel_field}'
                         if key in state:
                             v = state[key]
                             # Use a reference if this is a foreign key
@@ -664,6 +666,14 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 elif key in state:
                     grouped_state[m.name] = state[key]
             state = grouped_state
+        else:
+            # If any column names were redefined use those instead
+            cleaned_state = {}
+            for name, m in self.members().items():
+                field_name = (m.metadata or {}).get('name', name)
+                if field_name in state:
+                    cleaned_state[name] = state[field_name]
+            state = cleaned_state
 
         await super().__setstate__(state, scope)
 
@@ -675,11 +685,11 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         state.pop('__ref__', None)
         state.pop('_id', None)
 
+        # If any column names were redefined use those instead
         for name, m in self.members().items():
             if isinstance(m, Relation):
                 state.pop(name, None)
             elif m.metadata and 'name' in m.metadata and name in state:
-                # If any column names were redefined use those instead
                 state[m.metadata['name']] = state.pop(name)
 
         table = self.objects.table

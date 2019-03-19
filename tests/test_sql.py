@@ -75,6 +75,12 @@ class Comment(SQLModel):
     when = Instance(time)
 
 
+class Email(SQLModel):
+    to = Str().tag(length=120)
+    from_ = Str().tag(name='from').tag(length=120)
+    body = Str().tag(length=1024)
+
+
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -241,6 +247,31 @@ async def test_filters(db):
     # Not supported
     with pytest.raises(NotImplementedError):
         users = await User.objects.filter(age__xor=1)
+
+
+@pytest.mark.asyncio
+async def test_column_rename(db):
+    """ Columns can be tagged with custom names. Verify that it works.
+
+    """
+    await Email.objects.create()
+    e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
+    await e.save()
+
+    # Check without use labels
+    table = Email.objects.table
+    q = table.select().where(table.c.to==e.to)
+    row = await Email.objects.fetchone(q)
+    assert row['from'] == e.from_, 'Column rename failed'
+
+    # Check with use labels
+    q = table.select(use_labels=True).where(table.c.to==e.to)
+    row = await Email.objects.fetchone(q)
+    assert row[f'{table.name}_from'] == e.from_, 'Column rename failed'
+
+    # Restoring a renamed column needs to work
+    restored = await Email.objects.get(to=e.to)
+    restored.from_ == e.from_
 
 
 @pytest.mark.asyncio
