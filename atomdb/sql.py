@@ -677,8 +677,12 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
         await super().__setstate__(state, scope)
 
-    async def save(self):
+    async def save(self, force_insert=False, force_update=False):
         """ Alias to save this object to the database """
+        if force_insert and force_update:
+            raise ValueError(
+                'Cannot use force_insert and force_update together')
+
         db = self.objects
         state = self.__getstate__()
         state.pop('__model__', None)
@@ -694,14 +698,22 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
         table = self.objects.table
         async with db.engine.acquire() as conn:
-            if self._id:
+            if force_update or (self._id and not force_insert):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
+                if not r.rowcount:
+                    raise sa.exc.InvalidRequestError(
+                        f'Cannot update "{self}", no rows with pk={self._id} '
+                        f'exist.')
             else:
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
-                self._id = r.lastrowid
+
+                # TODO: Is this correct?
+                # If force insert is used we may not want this?
+                if r.lastrowid:
+                    self._id = r.lastrowid
             await conn.execute('commit')
             return r
 

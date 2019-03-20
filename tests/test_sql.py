@@ -308,6 +308,19 @@ async def test_query_many_to_one(db):
     assert len(await Job.objects.fetchmany(q, size=2)) == 2
 
 
+@pytest.mark.asyncio
+async def test_save_errors(db):
+    await User.objects.create()
+
+    u = User()
+    with pytest.raises(ValueError):
+        # Cant do both
+        await u.save(force_insert=True, force_update=True)
+
+    with pytest.raises(sa.exc.InvalidRequestError):
+        # Update on unsaved doesn't work
+        await u.save(force_update=True)
+
 @pytest.mark.skip(reason="Not implemented")
 @pytest.mark.asyncio
 async def test_nested_save_restore(db):
