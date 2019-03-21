@@ -17,8 +17,9 @@ from atom import api
 from atom.atom import AtomMeta, with_metaclass
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance
+    ForwardInstance, atomref
 )
+from atom.datastructures.api import sortedmap
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
 from sqlalchemy.orm.query import Query
@@ -264,7 +265,8 @@ class SQLModelSerializer(ModelSerializer):
 
 class SQLModelManager(ModelManager):
     """ Manages models via aiopg, aiomysql, or similar libraries supporting
-    SQLAlchemy tables. It stores a table for each class
+    SQLAlchemy tables. It stores a table for each class and when accessed
+    on a Model subclass it returns a table proxy binding.
 
     """
     #: DB URL
@@ -272,6 +274,9 @@ class SQLModelManager(ModelManager):
 
     #: Metadata
     metadata = Instance(sa.MetaData)
+
+    #: Table proxy cache
+    proxies = Dict()
 
     def _default_metadata(self):
         return sa.MetaData(SQLBinding(manager=self))
@@ -306,7 +311,10 @@ class SQLModelManager(ModelManager):
         table = cls.__table__
         if table is None:
             table = cls.__table__ = create_table(cls, self.metadata)
-        return SQLTableProxy(table=table, model=cls)
+        proxy = self.proxies.get(cls)
+        if proxy is None:
+            proxy = self.proxies[cls] = SQLTableProxy(table=table, model=cls)
+        return proxy
 
     def _default_database(self):
         raise EnvironmentError("No database engine has been set. Use "
@@ -327,6 +335,9 @@ class SQLTableProxy(Atom):
 
     #: Model which owns the table
     model = Subclass(Model)
+
+    #: Cache of pk: obj using atomrefs
+    cache = Instance(sortedmap, ())
 
     @property
     def engine(self):
@@ -631,51 +642,97 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     #: Use SQL object manager
     objects = SQLModelManager.instance()
 
+    @classmethod
+    async def restore(cls, state):
+        """ Restore an object from the database using the primary key. Save
+        an atomref in the table's object cache.
+        """
+        try:
+            pk = state[f'{cls.__model__}_{cls.__pk__}']
+        except KeyError:
+            pk = state[cls.__pk__]
+
+        # Check if this is in the cache
+        cache = cls.objects.cache
+        aref = cache.get(pk)
+        obj = None if aref is None else aref()
+        if obj is None:
+            # Create and cache it
+            obj = cls.__new__(cls)
+            cache[pk] = atomref(obj)
+        await obj.__setstate__(state)
+        return obj
+
     async def __setstate__(self, state, scope=None):
+        # Holds cleaned state extracted for this model which may come from
+        # a DB row using labels or renamed columns
+        cleaned_state = {}
+
         # Check if the state is using labels by looking for the pk field
         pk_label = f'{self.__model__}_{self.__pk__}'
+
         if pk_label in state:
             # Convert the joined tables into nested states
             table = self.objects.table
             table_name = table.name
             pk = state[pk_label]
             ref = os.urandom(16)
-            grouped_state = {'__ref__': ref}
+            cleaned_state['__ref__'] = ref
 
             # Pull known
-            for m in self.members().values():
-                field_name = (m.metadata or {}).get('name', m.name)
-                key = f'{table_name}_{field_name}'
-                if isinstance(m, Relation):
-                    rel = m.to
-                    rel_table_name = rel.__model__
-                    nested_state = {}
-                    for sm in rel.members().values():
-                        rel_field = (sm.metadata or {}).get('name', sm.name)
-                        key = f'{rel_table_name}_{rel_field}'
-                        if key in state:
-                            v = state[key]
-                            # Use a reference if this is a foreign key
-                            if (rel, sm) in self.__backrefs__ and v == pk:
-                                v = {'__ref__': ref}
-                            nested_state[sm.name] = v
-                    if nested_state:
-                        # Update any backrefs
-                        nested_state['__model__'] = rel_table_name
-                        grouped_state[m.name] = [nested_state]
-                elif key in state:
-                    grouped_state[m.name] = state[key]
-            state = grouped_state
-        else:
-            # If any column names were redefined use those instead
-            cleaned_state = {}
             for name, m in self.members().items():
                 field_name = (m.metadata or {}).get('name', name)
-                if field_name in state:
-                    cleaned_state[name] = state[field_name]
-            state = cleaned_state
+                field_label = f'{table_name}_{field_name}'
 
-        await super().__setstate__(state, scope)
+                if isinstance(m, FK_TYPES):
+                    rel = resolve_member_type(m)
+                    if issubclass(rel, SQLModel):
+                        # If the related model was joined, the pk field should
+                        # exist so automatically restore that as well
+                        rel_pk_field = f'{rel.__model__}_{rel.__pk__}'
+                        try:
+                            rel_id = state[field_label]
+                        except KeyError:
+                            rel_id = state.get(rel_pk_field)
+                        if rel_id:
+                            # Lookup in cache first to avoid recursion errors
+                            aref = rel.objects.cache.get(rel_id)
+                            obj = None if aref is None else aref()
+                            if obj is None and rel_pk_field in state:
+                                obj = await rel.restore(state)
+                            cleaned_state[name] = obj
+                            continue
+
+                elif isinstance(m, Relation):
+                    # Skip relations
+                    continue
+
+                # Regular fields
+                if field_label in state:
+                    cleaned_state[name] = state[field_label]
+
+        else:
+            # If any column names were redefined use those instead
+            for name, m in self.members().items():
+                field_name = (m.metadata or {}).get('name', name)
+
+                if field_name not in state:
+                    continue
+                v = state[field_name]
+
+                # Attempt to lookup related fields from the cache
+                if isinstance(m, FK_TYPES):
+                    rel = resolve_member_type(m)
+                    if issubclass(rel, SQLModel):
+                        aref = rel.objects.cache.get(v)
+                        obj = None if aref is None else aref()
+                        if obj is None:
+                            # Skip because this will throw a TypeError anyways
+                            continue
+                        v = obj
+
+                cleaned_state[name] = v
+        await super().__setstate__(cleaned_state, scope)
 
     async def save(self, force_insert=False, force_update=False):
         """ Alias to save this object to the database """
@@ -683,7 +740,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             raise ValueError(
                 'Cannot use force_insert and force_update together')
 
-        db = self.objects
+        mgr = self.objects
         state = self.__getstate__()
         state.pop('__model__', None)
         state.pop('__ref__', None)
@@ -696,8 +753,8 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             elif m.metadata and 'name' in m.metadata and name in state:
                 state[m.metadata['name']] = state.pop(name)
 
-        table = self.objects.table
-        async with db.engine.acquire() as conn:
+        table = mgr.table
+        async with mgr.connection() as conn:
             if force_update or (self._id and not force_insert):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
@@ -714,15 +771,24 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 # If force insert is used we may not want this?
                 if r.lastrowid:
                     self._id = r.lastrowid
+
+                # Save a ref to the object in the model cache
+                mgr.cache[self._id] = atomref(self)
+
             await conn.execute('commit')
             return r
 
     async def delete(self):
         """ Alias to delete this object in the database """
-        db = self.objects
-        table = self.objects.table
-        if self._id:
-            async with db.engine.acquire() as conn:
-                q = table.delete().where(table.c[self.__pk__] == self._id)
-                await conn.execute(q)
+        pk = self._id
+        if not pk:
+            return
+        mgr = self.objects
+        table = mgr.table
+        async with mgr.connection() as conn:
+            q = table.delete().where(table.c[self.__pk__] == pk)
+            r = await conn.execute(q)
+            if r.rowcount:
                 await conn.execute('commit')
+                del mgr.cache[pk]
+            return r

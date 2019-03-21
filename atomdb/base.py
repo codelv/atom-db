@@ -367,8 +367,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
                     f"\nValue: {pformat(v)}"
                     f"\nScope: {pformat(scope)}"
                     f"\nState: {pformat(state)}"
-                    f"\n{exc}"
-                )
+                    f"\n{exc}")
 
     # ==========================================================================
     # Database API
