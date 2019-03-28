@@ -308,13 +308,14 @@ class SQLModelManager(ModelManager):
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
-        table = cls.__table__
-        if table is None:
-            table = cls.__table__ = create_table(cls, self.metadata)
-        proxy = self.proxies.get(cls)
-        if proxy is None:
+        try:
+            return self.proxies[cls]
+        except KeyError:
+            table = cls.__table__
+            if table is None:
+                table = cls.__table__ = create_table(cls, self.metadata)
             proxy = self.proxies[cls] = SQLTableProxy(table=table, model=cls)
-        return proxy
+            return proxy
 
     def _default_database(self):
         raise EnvironmentError("No database engine has been set. Use "
@@ -337,7 +338,7 @@ class SQLTableProxy(Atom):
     model = Subclass(Model)
 
     #: Cache of pk: obj using atomrefs
-    cache = Instance(sortedmap, ())
+    cache = Dict()#Instance(sortedmap, ())
 
     @property
     def engine(self):
@@ -643,9 +644,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     objects = SQLModelManager.instance()
 
     @classmethod
-    async def restore(cls, state):
+    async def restore(cls, state, force=False):
         """ Restore an object from the database using the primary key. Save
-        an atomref in the table's object cache.
+        an atomref in the table's object cache.  If force is True, update
+        the cache if it exists.
         """
         try:
             pk = state[f'{cls.__model__}_{cls.__pk__}']
@@ -655,12 +657,17 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         # Check if this is in the cache
         cache = cls.objects.cache
         aref = cache.get(pk)
-        obj = None if aref is None else aref()
+        obj = aref() if aref else None
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
             cache[pk] = atomref(obj)
-        await obj.__setstate__(state)
+
+            # This ideally should only be done if created
+            await obj.__setstate__(state)
+        elif force:
+            await obj.__setstate__(state)
+
         return obj
 
     async def __setstate__(self, state, scope=None):
@@ -672,12 +679,11 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         pk_label = f'{self.__model__}_{self.__pk__}'
 
         if pk_label in state:
+            # Convert row to dict because it speeds up lookups
+            state = dict(state)
             # Convert the joined tables into nested states
-            table = self.objects.table
-            table_name = table.name
+            table_name = self.__table__.name
             pk = state[pk_label]
-            ref = os.urandom(16)
-            cleaned_state['__ref__'] = ref
 
             # Pull known
             for name, m in self.members().items():
@@ -697,8 +703,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                         if rel_id:
                             # Lookup in cache first to avoid recursion errors
                             aref = rel.objects.cache.get(rel_id)
-                            obj = None if aref is None else aref()
-                            if obj is None and rel_pk_field in state:
+                            obj = aref() if aref else None
+                            if obj is None:
+                                if rel_pk_field not in state:
+                                    continue
                                 obj = await rel.restore(state)
                             cleaned_state[name] = obj
                             continue
@@ -708,28 +716,30 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                     continue
 
                 # Regular fields
-                if field_label in state:
+                try:
                     cleaned_state[name] = state[field_label]
+                except KeyError:
+                    continue
 
         else:
             # If any column names were redefined use those instead
             for name, m in self.members().items():
                 field_name = (m.metadata or {}).get('name', name)
 
-                if field_name not in state:
+                try:
+                    v = state[field_name]
+                except KeyError:
                     continue
-                v = state[field_name]
 
                 # Attempt to lookup related fields from the cache
                 if isinstance(m, FK_TYPES):
                     rel = resolve_member_type(m)
                     if issubclass(rel, SQLModel):
                         aref = rel.objects.cache.get(v)
-                        obj = None if aref is None else aref()
-                        if obj is None:
-                            # Skip because this will throw a TypeError anyways
+                        v = aref() if aref else None
+                        if v is None:
+                            # Skip because this will throw a TypeError
                             continue
-                        v = obj
 
                 cleaned_state[name] = v
         await super().__setstate__(cleaned_state, scope)
@@ -792,3 +802,13 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 await conn.execute('commit')
                 del mgr.cache[pk]
             return r
+
+    def __del__(self):
+        """ Cleanup the cache when this object is no longer needed """
+        try:
+            pk = self._id
+            if pk:
+                del self.objects.cache[pk]
+        except KeyError:
+            pass
+

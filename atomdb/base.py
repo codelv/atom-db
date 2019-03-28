@@ -17,6 +17,7 @@ from atom.api import (
 )
 from atom.atom import AtomMeta, with_metaclass
 from atom.dict import _DictProxy
+from random import getrandbits
 from pprint import pformat
 
 
@@ -280,8 +281,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
     _id = Bytes()
 
     #: A unique ID used to handle cyclical serialization and deserialization
-    #: Do NOT use python's id() as these are reused and can cause conflicts
-    __ref__ = Bytes(factory=lambda: os.urandom(16))
+    __ref__ = Bytes(factory=lambda: b'%0x' % getrandbits(30 * 4))
 
     #: State set when restored from the database. This should be updated
     #: upon successful save and never modified

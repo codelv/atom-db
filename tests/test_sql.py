@@ -1,3 +1,4 @@
+import gc
 import os
 import re
 import pytest
@@ -227,6 +228,7 @@ async def test_filters(db):
     # Startswith
     u = await User.objects.get(name__startswith=user.name[0])
     assert u.name == user.name
+    assert u is user # Now cached
 
     # In query
     users = await User.objects.filter(name__in=[user.name, user2.name])
@@ -235,6 +237,7 @@ async def test_filters(db):
     # Is query
     users = await User.objects.filter(active__is=False)
     assert len(users) == 1 and users[0].active == False
+    assert users[0] is user2 # Now cached
 
     # Not query
     users = await User.objects.filter(rating__isnot=None)
@@ -303,12 +306,25 @@ async def test_query_many_to_one(db):
         role = await JobRole.restore(row)
 
         # Job should be restored from the cache
-        assert role.job
+        assert role.job is not None
         #for role in job.roles:
         #    assert role.job == job
         loaded.append(job)
 
     assert len(await Job.objects.fetchmany(q, size=2)) == 2
+
+    # Make sure they pull from cache
+    roles = await JobRole.objects.all()
+    for role in roles:
+        assert role.job is not None
+
+    # Clear cache and ensure it doesn't pull from cache now
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+
+    roles = await JobRole.objects.all()
+    for role in roles:
+        assert role.job is None
 
 
 @pytest.mark.asyncio
@@ -323,6 +339,24 @@ async def test_save_errors(db):
     with pytest.raises(sa.exc.InvalidRequestError):
         # Update on unsaved doesn't work
         await u.save(force_update=True)
+
+
+@pytest.mark.asyncio
+async def test_object_caching(db):
+    await Email.objects.create()
+    e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
+    await e.save()
+    pk = e._id
+    aref = Email.objects.cache.get(pk)
+    assert aref, 'Object was not cached'
+    assert aref() is e, 'Cached object is invalid'
+
+    # Delete
+    del e
+
+    # Make sure cache was cleaned up
+    aref = Email.objects.cache.get(pk)
+    assert aref is None, 'Cached object was not released'
 
 
 @pytest.mark.skip(reason="Not implemented")
