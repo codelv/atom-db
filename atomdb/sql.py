@@ -644,7 +644,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     objects = SQLModelManager.instance()
 
     @classmethod
-    async def restore(cls, state):
+    async def restore(cls, state, force=False):
         """ Restore an object from the database using the primary key. Save
         an atomref in the table's object cache.  If force is True, update
         the cache if it exists.
@@ -663,8 +663,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             obj = cls.__new__(cls)
             cache[pk] = atomref(obj)
 
-        # This ideally should only be done if created
-        await obj.__setstate__(state)
+            # This ideally should only be done if created
+            await obj.__setstate__(state)
+        elif force:
+            await obj.__setstate__(state)
 
         return obj
 
