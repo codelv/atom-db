@@ -10,7 +10,7 @@ Created on Jun 12, 2018
 @author: jrm
 """
 import bson
-from atom.api import Instance
+from atom.api import Atom, Instance, Value, Dict, atomref
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
 
 
@@ -19,6 +19,25 @@ class NoSQLModelSerializer(ModelSerializer):
     will automatically save and restore references where present.
 
     """
+    async def get_or_create(self, cls, state, scope):
+        """ Restore an object from the database. If the object is cached,
+        use that instead.
+        """
+        # Check if this is in the cache
+        pk = state.get('_id')
+        cache = cls.objects.cache
+        aref = cache.get(pk)
+        obj = aref() if aref else None
+        if obj is None:
+            # Create and cache it
+            obj = cls.__new__(cls)
+            if pk:
+                cache[pk] = atomref(obj)
+
+            # This ideally should only be done if created
+            return (obj, True)
+        return (obj, False)
+
     async def get_object_state(self, obj, state, scope):
         ModelType = obj.__class__
         return await ModelType.objects.find_one({'_id': state['_id']})
@@ -39,6 +58,20 @@ class NoSQLModelSerializer(ModelSerializer):
         return {m.__model__: m for m in find_subclasses(NoSQLModel)}
 
 
+class NoSQLDatabaseProxy(Atom):
+    """ A proxy to the collection which holds a cache of model objects.
+
+    """
+    #: Object cache
+    cache = Dict()
+
+    #: Database handle
+    table = Value()
+
+    def __getattr__(self, name):
+        return getattr(self.table, name)
+
+
 class NoSQLModelManager(ModelManager):
     """ A descriptor so you can use this somewhat like Django's models.
     Assuming your using motor or txmongo.
@@ -48,12 +81,21 @@ class NoSQLModelManager(ModelManager):
     MyModel.objects.find_one({'_id':'someid})
 
     """
+
+    #: Table proxy cache
+    proxies = Dict()
+
     def __get__(self, obj, cls=None):
         """ Handle objects from the class that owns the manager """
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the collection when used from a Model
-        return self.database[cls.__model__]
+        try:
+            return self.proxies[cls]
+        except KeyError:
+            proxy = self.proxies[cls] = NoSQLDatabaseProxy(
+                table=self.database[cls.__model__])
+            return proxy
 
     def _default_database(self):
         raise EnvironmentError("No database has been set. Use "
@@ -75,6 +117,29 @@ class NoSQLModel(Model):
     #: Handles database access
     objects = NoSQLModelManager.instance()
 
+    @classmethod
+    async def restore(cls, state, force=False):
+        """ Restore an object from the database. If the object is cached,
+        use that instead.
+        """
+        pk = state['_id']
+
+        # Check if this is in the cache
+        cache = cls.objects.cache
+        aref = cache.get(pk)
+        obj = aref() if aref else None
+        if obj is None:
+            # Create and cache it
+            obj = cls.__new__(cls)
+            cache[pk] = atomref(obj)
+
+            # This ideally should only be done if created
+            await obj.__setstate__(state)
+        elif force:
+            await obj.__setstate__(state)
+
+        return obj
+
     async def save(self):
         """ Alias to delete this object to the database """
         db = self.objects
@@ -84,10 +149,26 @@ class NoSQLModel(Model):
         else:
             r = await db.insert_one(state)
             self._id = r.inserted_id
+            db.cache[self._id] = atomref(self)
             return r
 
     async def delete(self):
         """ Alias to delete this object in the database """
         db = self.objects
-        if self._id:
-            return await db.delete_one({'_id': self._id})
+        pk = self._id
+        if pk:
+            r = await db.delete_one({'_id': pk})
+            del db.cache[pk]
+            del self._id
+            return r
+
+    def __del__(self):
+        """ Cleanup the cache when this object is no longer needed """
+        pk = self._id
+        if pk:
+            try:
+                del self.objects.cache[pk]
+            except KeyError:
+                pass
+
+

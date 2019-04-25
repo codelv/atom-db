@@ -84,6 +84,7 @@ async def test_simple_save_restore_delete(db):
     assert state
 
     u = await User.restore(state)
+    assert u is user  # No cached
     assert u._id == user._id
     assert u.name == user.name
     assert u.email == user.email

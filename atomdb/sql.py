@@ -338,7 +338,7 @@ class SQLTableProxy(Atom):
     model = Subclass(Model)
 
     #: Cache of pk: obj using atomrefs
-    cache = Dict()#Instance(sortedmap, ())
+    cache = Dict()
 
     @property
     def engine(self):
@@ -801,14 +801,15 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             if r.rowcount:
                 await conn.execute('commit')
                 del mgr.cache[pk]
+                del self._id
             return r
 
     def __del__(self):
         """ Cleanup the cache when this object is no longer needed """
-        try:
-            pk = self._id
-            if pk:
+        pk = self._id
+        if pk:
+            try:
                 del self.objects.cache[pk]
-        except KeyError:
-            pass
+            except KeyError:
+                pass
 
