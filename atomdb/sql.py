@@ -19,7 +19,6 @@ from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
     ForwardInstance, atomref
 )
-from atom.datastructures.api import sortedmap
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
 from sqlalchemy.orm.query import Query
@@ -744,7 +743,8 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 cleaned_state[name] = v
         await super().__setstate__(cleaned_state, scope)
 
-    async def save(self, force_insert=False, force_update=False):
+    async def save(self, force_insert=False, force_update=False,
+                   connection=None, commit=True):
         """ Alias to save this object to the database """
         if force_insert and force_update:
             raise ValueError(
@@ -764,7 +764,11 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 state[m.metadata['name']] = state.pop(name)
 
         table = mgr.table
-        async with mgr.connection() as conn:
+        try:
+            if connection is None:
+                conn = await mgr.engine._acquire()
+            else:
+                conn = connection
             if force_update or (self._id and not force_insert):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
@@ -785,24 +789,36 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 # Save a ref to the object in the model cache
                 mgr.cache[self._id] = atomref(self)
 
-            await conn.execute('commit')
+            if commit:
+                await conn.execute('commit')
             return r
+        finally:
+            if connection is None:
+                await mgr.engine.release(conn)
 
-    async def delete(self):
+    async def delete(self, connection=None, commit=True):
         """ Alias to delete this object in the database """
         pk = self._id
         if not pk:
             return
         mgr = self.objects
         table = mgr.table
-        async with mgr.connection() as conn:
-            q = table.delete().where(table.c[self.__pk__] == pk)
+        q = table.delete().where(table.c[self.__pk__] == pk)
+        try:
+            if connection is None:
+                conn = await mgr.engine._acquire()
+            else:
+                conn = connection
             r = await conn.execute(q)
             if r.rowcount:
-                await conn.execute('commit')
+                if commit:
+                    await conn.execute('commit')
                 del mgr.cache[pk]
                 del self._id
             return r
+        finally:
+            if connection is None:
+                await mgr.engine.release(conn)
 
     def __del__(self):
         """ Cleanup the cache when this object is no longer needed """
