@@ -48,6 +48,7 @@ def db(event_loop):
     db = client.enaml_web_test_db
     mgr = NoSQLModelManager.instance()
     mgr.database = db
+    mgr.proxies = {} # Flush the db cache
     yield db
 
 
