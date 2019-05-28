@@ -10,6 +10,7 @@ Created on Aug 2, 2018
 @author: jrm
 """
 import os
+import logging
 import datetime
 import sqlalchemy as sa
 from functools import wraps
@@ -35,6 +36,9 @@ COLUMN_KWARGS = (
     'quote', 'unique', 'system', 'comment'
 )
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
+
+DEBUG = False
+log = logging.getLogger('atomdb.sql')
 
 
 class Relation(ContainerList):
@@ -408,6 +412,8 @@ class SQLTableProxy(Atom):
         """
         restore = self.model.restore
         q = self.query(self.table.select(), **filters)
+        if DEBUG:
+            log.debug("SQL | {}.filter({})".format(self.table.name, filters))
         return [await restore(row) for row in await self.fetchall(q)]
 
     async def delete(self, **filters):
@@ -425,9 +431,13 @@ class SQLTableProxy(Atom):
 
         """
         q = self.query(self.table.delete(), **filters)
+        if DEBUG:
+            log.debug("SQL | {}.delete({})".format(self.table.name, filters))
         async with self.connection() as conn:
             r = await conn.execute(q)
             await conn.execute('commit')
+            if DEBUG:
+                log.debug("SQL | {}".format(r))
             return r
 
     async def all(self):
@@ -449,8 +459,15 @@ class SQLTableProxy(Atom):
         """
         q = self.query(self.table.select(), **filters)
         row = await self.fetchone(q)
+        if DEBUG:
+            log.debug("SQL | {}.get({})".format(self.table.name, filters))
+            log.debug("SQL | {}".format(str(q)))
         if row:
+            if DEBUG:
+                log.debug("SQL |     {}".format(str(row)[:1000]))
             return await self.model.restore(row)
+        if DEBUG:
+            log.debug("SQL | {} No results".format(self.table.name))
 
     async def get_or_create(self, **filters):
         """ Get or create a model matching the given criteria
@@ -466,11 +483,17 @@ class SQLTableProxy(Atom):
             A tuple of the object and a bool indicating if it was just created
 
         """
+        if DEBUG:
+            log.debug("SQL | {}.get_or_create({})".format(
+                self.table.name, filters))
         obj = await self.get(**filters)
         if obj is not None:
             return (obj, False)
         obj = self.model(**{k: v for k, v in filters.items() if '__' not in k})
         await obj.save()
+        if DEBUG:
+            log.debug("SQL | {} Created new {} with id={}".format(
+                self.table.name, obj, obj._id))
         return (obj, True)
 
     def query(self, __q__=None, **filters):
