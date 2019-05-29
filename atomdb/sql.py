@@ -12,13 +12,14 @@ Created on Aug 2, 2018
 import os
 import logging
 import datetime
+import weakref
 import sqlalchemy as sa
 from functools import wraps
 from atom import api
 from atom.atom import AtomMeta, with_metaclass
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance, atomref
+    ForwardInstance
 )
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
@@ -340,8 +341,8 @@ class SQLTableProxy(Atom):
     #: Model which owns the table
     model = Subclass(Model)
 
-    #: Cache of pk: obj using atomrefs
-    cache = Dict()
+    #: Cache of pk: obj using weakrefs
+    cache = Typed(weakref.WeakValueDictionary, ())
 
     @property
     def engine(self):
@@ -489,11 +490,12 @@ class SQLTableProxy(Atom):
         obj = await self.get(**filters)
         if obj is not None:
             return (obj, False)
-        obj = self.model(**{k: v for k, v in filters.items() if '__' not in k})
+        state = {k: v for k, v in filters.items() if '__' not in k}
+        obj = self.model(**state)
         await obj.save()
         if DEBUG:
-            log.debug("SQL | {} Created new {} with id={}".format(
-                self.table.name, obj, obj._id))
+            log.debug("SQL | {} Created new {} with id={}: {}".format(
+                self.table.name, obj, obj._id, state))
         return (obj, True)
 
     def query(self, __q__=None, **filters):
@@ -668,7 +670,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     @classmethod
     async def restore(cls, state, force=False):
         """ Restore an object from the database using the primary key. Save
-        an atomref in the table's object cache.  If force is True, update
+        a ref in the table's object cache.  If force is True, update
         the cache if it exists.
         """
         try:
@@ -678,12 +680,11 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
         # Check if this is in the cache
         cache = cls.objects.cache
-        aref = cache.get(pk)
-        obj = aref() if aref else None
+        obj = cache.get(pk)
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            cache[pk] = atomref(obj)
+            cache[pk] = obj
 
             # This ideally should only be done if created
             await obj.__setstate__(state)
@@ -724,8 +725,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                             rel_id = state.get(rel_pk_field)
                         if rel_id:
                             # Lookup in cache first to avoid recursion errors
-                            aref = rel.objects.cache.get(rel_id)
-                            obj = aref() if aref else None
+                            obj = rel.objects.cache.get(rel_id)
                             if obj is None:
                                 if rel_pk_field not in state:
                                     continue
@@ -757,8 +757,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 if isinstance(m, FK_TYPES):
                     rel = resolve_member_type(m)
                     if issubclass(rel, SQLModel):
-                        aref = rel.objects.cache.get(v)
-                        v = aref() if aref else None
+                        v = rel.objects.cache.get(v)
                         if v is None:
                             # Skip because this will throw a TypeError
                             continue
@@ -810,7 +809,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                     self._id = r.lastrowid
 
                 # Save a ref to the object in the model cache
-                mgr.cache[self._id] = atomref(self)
+                mgr.cache[self._id] = self
 
             if commit:
                 await conn.execute('commit')
@@ -842,13 +841,4 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         finally:
             if connection is None:
                 await mgr.engine.release(conn)
-
-    def __del__(self):
-        """ Cleanup the cache when this object is no longer needed """
-        pk = self._id
-        if pk:
-            try:
-                del self.objects.cache[pk]
-            except KeyError:
-                pass
 

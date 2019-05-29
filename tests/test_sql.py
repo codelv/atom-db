@@ -202,15 +202,19 @@ async def test_get_or_create(db):
         if 'Unknown table' not in str(e):
             raise
     await User.objects.create()
+
+    name = faker.name()
+    email = faker.email()
+
     user, created = await User.objects.get_or_create(
-        name=faker.name(), email=faker.email())
+        name=name, email=email)
     assert created
-    assert user._id
+    assert user._id and user.name == name and user.email == user.email
 
     u, created = await User.objects.get_or_create(
         name=user.name, email=user.email)
     assert u._id == user._id
-    assert not created
+    assert not created and user.name == name and user.email == user.email
 
 
 @pytest.mark.asyncio
@@ -348,11 +352,13 @@ async def test_object_caching(db):
     await e.save()
     pk = e._id
     aref = Email.objects.cache.get(pk)
-    assert aref, 'Object was not cached'
-    assert aref() is e, 'Cached object is invalid'
+    assert aref is e, 'Cached object is invalid'
 
     # Delete
     del e
+    del aref
+
+    gc.collect()
 
     # Make sure cache was cleaned up
     aref = Email.objects.cache.get(pk)
