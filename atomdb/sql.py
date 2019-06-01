@@ -445,7 +445,6 @@ class SQLTableProxy(Atom):
         q = self.query(self.table.delete(), **filters)
         async with self.connection() as conn:
             r = await conn.execute(q)
-            await conn.execute('commit')
             return r
 
     async def all(self):
@@ -778,7 +777,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         await super().__setstate__(cleaned_state, scope)
 
     async def save(self, force_insert=False, force_update=False,
-                   connection=None, commit=True):
+                   connection=None):
         """ Alias to save this object to the database """
         if force_insert and force_update:
             raise ValueError(
@@ -822,15 +821,12 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
                 # Save a ref to the object in the model cache
                 mgr.cache[self._id] = self
-
-            if commit:
-                await conn.execute('commit')
             return r
         finally:
             if connection is None:
                 await mgr.engine.release(conn)
 
-    async def delete(self, connection=None, commit=True):
+    async def delete(self, connection=None):
         """ Alias to delete this object in the database """
         pk = self._id
         if not pk:
@@ -845,8 +841,6 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 conn = connection
             r = await conn.execute(q)
             if r.rowcount:
-                if commit:
-                    await conn.execute('commit')
                 del mgr.cache[pk]
                 del self._id
             return r
