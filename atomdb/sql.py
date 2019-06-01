@@ -24,6 +24,8 @@ from atom.api import (
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
 from sqlalchemy.orm.query import Query
+from sqlalchemy import func
+
 
 from .base import (
     ModelManager, ModelSerializer, Model, ModelMeta, find_subclasses
@@ -38,7 +40,6 @@ COLUMN_KWARGS = (
 )
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
 
-DEBUG = False
 log = logging.getLogger('atomdb.sql')
 
 
@@ -84,9 +85,12 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
         return sa.Date(**kwargs)
     elif issubclass(cls, datetime.time):
         return sa.Time(**kwargs)
+    elif issubclass(cls, (bytes, bytearray)):
+        return sa.Binary(**kwargs)
     raise NotImplementedError(
-        f"A column for {cls} could not be detected, please specify it "
-        f"manually by tagging it with .tag(column=<sqlalchemy column>)")
+        f"A type for {member.name} of {model} ({cls}) could not be "
+        f"determined automatically, please specify it manually by tagging it "
+        f"with .tag(column=<sqlalchemy column>)")
 
 
 def resolve_member_type(member):
@@ -155,8 +159,9 @@ def atom_member_to_sql_column(model, member, **kwargs):
     elif isinstance(member, api.Dict):
         return sa.JSON(**kwargs)
     raise NotImplementedError(
-        f"A column for {member} could not be detected, please specify it"
-        f"manually by tagging it with .tag(column=<sqlalchemy column>)")
+        f"A column for {member.name} of {model} could not be determined "
+        f"automatically, please specify it manually by tagging it "
+        f"with .tag(column=<sqlalchemy column>)")
 
 
 def create_table_column(model, member):
@@ -202,6 +207,8 @@ def create_table_column(model, member):
             return None
         if not isinstance(args, (tuple, list)):
             args = (args,)
+    elif isinstance(column_type, (tuple, list)):
+        args = column_type
     else:
         args = (column_type,)
     return sa.Column(column_name, *args, **kwargs)
@@ -395,7 +402,13 @@ class SQLTableProxy(Atom):
     async def fetchone(self, query):
         async with self.connection() as conn:
             r = await conn.execute(query)
-            return await r.fetchone()
+            row = await r.fetchone()
+            return row
+
+    async def scalar(self, query):
+        async with self.connection() as conn:
+            r = await conn.execute(query)
+            return await r.scalar()
 
     async def filter(self, **filters):
         """ Selects the objects matching the given filters
@@ -413,8 +426,6 @@ class SQLTableProxy(Atom):
         """
         restore = self.model.restore
         q = self.query(self.table.select(), **filters)
-        if DEBUG:
-            log.debug("SQL | {}.filter({})".format(self.table.name, filters))
         return [await restore(row) for row in await self.fetchall(q)]
 
     async def delete(self, **filters):
@@ -432,13 +443,9 @@ class SQLTableProxy(Atom):
 
         """
         q = self.query(self.table.delete(), **filters)
-        if DEBUG:
-            log.debug("SQL | {}.delete({})".format(self.table.name, filters))
         async with self.connection() as conn:
             r = await conn.execute(q)
             await conn.execute('commit')
-            if DEBUG:
-                log.debug("SQL | {}".format(r))
             return r
 
     async def all(self):
@@ -460,15 +467,8 @@ class SQLTableProxy(Atom):
         """
         q = self.query(self.table.select(), **filters)
         row = await self.fetchone(q)
-        if DEBUG:
-            log.debug("SQL | {}.get({})".format(self.table.name, filters))
-            log.debug("SQL | {}".format(str(q)))
         if row:
-            if DEBUG:
-                log.debug("SQL |     {}".format(str(row)[:1000]))
             return await self.model.restore(row)
-        if DEBUG:
-            log.debug("SQL | {} No results".format(self.table.name))
 
     async def get_or_create(self, **filters):
         """ Get or create a model matching the given criteria
@@ -484,19 +484,20 @@ class SQLTableProxy(Atom):
             A tuple of the object and a bool indicating if it was just created
 
         """
-        if DEBUG:
-            log.debug("SQL | {}.get_or_create({})".format(
-                self.table.name, filters))
         obj = await self.get(**filters)
         if obj is not None:
             return (obj, False)
         state = {k: v for k, v in filters.items() if '__' not in k}
         obj = self.model(**state)
         await obj.save()
-        if DEBUG:
-            log.debug("SQL | {} Created new {} with id={}: {}".format(
-                self.table.name, obj, obj._id, state))
         return (obj, True)
+
+    async def count(self, **filters):
+        """ Return a count of objects in the table matching the given filters
+
+        """
+        q = self.query(self.table.count(), **filters)
+        return await self.scalar(q)
 
     def query(self, __q__=None, **filters):
         """ Build a django-style query by adding a where clause to the given
@@ -710,7 +711,8 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
 
             # Pull known
             for name, m in self.members().items():
-                field_name = (m.metadata or {}).get('name', name)
+                metadata = (m.metadata or {})
+                field_name = metadata.get('name', name)
                 field_label = f'{table_name}_{field_name}'
 
                 if isinstance(m, FK_TYPES):
@@ -734,8 +736,18 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                             continue
 
                 elif isinstance(m, Relation):
-                    # Skip relations
-                    continue
+                    # Through must be a callable which returns a tuple of
+                    # the through table model
+                    through_factory = metadata.get('through')
+                    if through_factory:
+                        M2M, this_attr, rel_attr = through_factory()
+                        cleaned_state[name] = [
+                            getattr(r, rel_attr)
+                                for r in await M2M.objects.filter(
+                                    **{this_attr: pk})]
+                    else:
+                        # Skip relations
+                        continue
 
                 # Regular fields
                 try:
@@ -795,10 +807,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
-                if not r.rowcount:
-                    raise sa.exc.InvalidRequestError(
-                        f'Cannot update "{self}", no rows with pk={self._id} '
-                        f'exist.')
+                #if not r.rowcount:
+                #    raise sa.exc.InvalidRequestError(
+                #        f'Cannot update "{self}", no rows with pk={self._id} '
+                #        f'exist.')
             else:
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
