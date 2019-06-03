@@ -103,7 +103,8 @@ async def db(event_loop):
     user, pwd, host, port, db = m.groups()
 
     params = dict(
-        host=host, port=int(port), user=user, password=pwd, loop=event_loop)
+        host=host, port=int(port), user=user, password=pwd, loop=event_loop,
+        autocommit=True)
 
     # Create the DB
     async with aiomysql.connect(**params) as conn:
@@ -238,6 +239,9 @@ async def test_filters(db):
     users = await User.objects.filter(name__in=[user.name, user2.name])
     assert len(users) == 2
 
+    # Test use of count
+    assert await User.objects.count(name__in=[user.name, user2.name]) == 2
+
     # Is query
     users = await User.objects.filter(active__is=False)
     assert len(users) == 1 and users[0].active == False
@@ -340,9 +344,9 @@ async def test_save_errors(db):
         # Cant do both
         await u.save(force_insert=True, force_update=True)
 
-    with pytest.raises(sa.exc.InvalidRequestError):
-        # Update on unsaved doesn't work
-        await u.save(force_update=True)
+    # Updating unsaved will not work
+    r = await u.save(force_update=True)
+    assert r.rowcount == 0
 
 
 @pytest.mark.asyncio
