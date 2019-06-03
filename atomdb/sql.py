@@ -40,6 +40,9 @@ COLUMN_KWARGS = (
 )
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
 
+# Fields supported on the django style Meta class of a model
+VALID_META_FIELDS = ('db_table', 'unique_together')
+
 log = logging.getLogger('atomdb.sql')
 
 
@@ -230,12 +233,25 @@ def create_table(model, metadata):
     """
     name = model.__model__
     members = model.members()
-    columns = []
+    args = []
+
+    # Add columns
     for f in model.__fields__:
         column = create_table_column(model, members[f])
         if column is not None:
-            columns.append(column)
-    return sa.Table(name, metadata, *columns)
+            args.append(column)
+
+    # Add table metadata
+    meta = getattr(model, 'Meta', None)
+    if meta:
+        unique_together = getattr(meta, 'unique_together', [])
+        if unique_together:
+            if isinstance(unique_together[0], str):
+                unique_together = [unique_together]
+            for constraint in unique_together:
+                args.append(sa.UniqueConstraint(*constraint))
+
+    return sa.Table(name, metadata, *args)
 
 
 class SQLModelSerializer(ModelSerializer):
@@ -635,8 +651,11 @@ class SQLMeta(ModelMeta):
             if m.name == '_id':
                 continue
             if m.metadata and m.metadata.get('primary_key'):
+                if pk is not None:
+                    raise NotImplementedError(
+                        "Using multiple primary keys is not yet supported.")
                 pk = m
-                break
+
         if pk:
             cls._id = pk
             members['_id'] = pk
@@ -649,6 +668,21 @@ class SQLMeta(ModelMeta):
         # Will be set to the table model by manager, not done here to avoid
         # import errors that may occur
         cls.__backrefs__ = set()
+
+        # If a Meta class is defined check it's validity
+        opts = dct.get('Meta', None)
+        if opts is not None:
+            for f in dir(opts):
+                if f.startswith('_'):
+                    continue
+                if f not in VALID_META_FIELDS:
+                    raise TypeError(
+                        f'{f} is not a valid Meta field on {cls}.')
+
+            db_table = getattr(opts, 'db_table', None)
+            if db_table:
+                cls.__model__ = db_table
+
         return cls
 
 

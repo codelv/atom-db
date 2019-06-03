@@ -67,6 +67,16 @@ class Page(SQLModel):
     data = Instance(object).tag(column=sa.Column('data', sa.LargeBinary()))
 
 
+class PageImage(SQLModel):
+    # Example through table for job role
+    page = Instance(Page).tag(nullable=False)
+    image = Instance(Page).tag(nullable=False)
+
+    class Meta:
+        db_table = 'page_image_m2m'
+        unique_together = ('page', 'image')
+
+
 class Comment(SQLModel):
     page = Instance(Page)
     author = Instance(User)
@@ -456,3 +466,21 @@ async def test_circular(db):
     assert r.title == p.title
     assert r.related[0].title == related_page.title
     assert r.related[0].related[0] == r
+
+
+def test_invalid_meta_field():
+    with pytest.raises(TypeError):
+        class TestTable(SQLModel):
+            id = Int().tag(primary_key=True)
+
+            class Meta:
+                # table_name is invalid, use db_table
+                table_name = 'use db_table'
+
+
+def test_invalid_multiple_pk():
+    with pytest.raises(NotImplementedError):
+        class TestTable(SQLModel):
+            id = Int().tag(primary_key=True)
+            id2 = Int().tag(primary_key=True)
+
