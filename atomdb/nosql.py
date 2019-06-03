@@ -10,7 +10,8 @@ Created on Jun 12, 2018
 @author: jrm
 """
 import bson
-from atom.api import Atom, Instance, Value, Dict, atomref
+import weakref
+from atom.api import Atom, Instance, Value, Dict, Typed
 from .base import ModelManager, ModelSerializer, Model, find_subclasses
 
 
@@ -26,13 +27,12 @@ class NoSQLModelSerializer(ModelSerializer):
         # Check if this is in the cache
         pk = state.get('_id')
         cache = cls.objects.cache
-        aref = cache.get(pk)
-        obj = aref() if aref else None
+        obj = cache.get(pk)
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
             if pk:
-                cache[pk] = atomref(obj)
+                cache[pk] = obj
 
             # This ideally should only be done if created
             return (obj, True)
@@ -63,7 +63,7 @@ class NoSQLDatabaseProxy(Atom):
 
     """
     #: Object cache
-    cache = Dict()
+    cache = Typed(weakref.WeakValueDictionary, ())
 
     #: Database handle
     table = Value()
@@ -126,12 +126,11 @@ class NoSQLModel(Model):
 
         # Check if this is in the cache
         cache = cls.objects.cache
-        aref = cache.get(pk)
-        obj = aref() if aref else None
+        obj = cache.get(pk)
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            cache[pk] = atomref(obj)
+            cache[pk] = obj
 
             # This ideally should only be done if created
             await obj.__setstate__(state)
@@ -149,7 +148,7 @@ class NoSQLModel(Model):
         else:
             r = await db.insert_one(state)
             self._id = r.inserted_id
-            db.cache[self._id] = atomref(self)
+            db.cache[self._id] = self
             return r
 
     async def delete(self):
@@ -161,14 +160,5 @@ class NoSQLModel(Model):
             del db.cache[pk]
             del self._id
             return r
-
-    def __del__(self):
-        """ Cleanup the cache when this object is no longer needed """
-        pk = self._id
-        if pk:
-            try:
-                del self.objects.cache[pk]
-            except KeyError:
-                pass
 
 
