@@ -41,9 +41,28 @@ COLUMN_KWARGS = (
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
 
 # Fields supported on the django style Meta class of a model
-VALID_META_FIELDS = ('db_table', 'unique_together')
+VALID_META_FIELDS = ('db_table', 'unique_together', 'abstract')
 
 log = logging.getLogger('atomdb.sql')
+
+
+def find_sql_models():
+    """ Finds all non-abstract imported SQLModels by looking up subclasses
+    of the SQLModel.
+
+    Yields
+    ------
+    cls: SQLModel
+
+    """
+    for model in find_subclasses(SQLModel):
+        # Get model Meta class
+        meta = getattr(model, 'Meta', None)
+        if meta:
+            # If this is marked as abstract ignore it
+            if getattr(meta, 'abstract', False):
+                continue
+        yield model
 
 
 class Relation(ContainerList):
@@ -244,6 +263,10 @@ def create_table(model, metadata):
     # Add table metadata
     meta = getattr(model, 'Meta', None)
     if meta:
+        abstract = getattr(meta, 'abstract', False)
+        if abstract:
+            raise NotImplementedError(
+                f"Tables cannot be created for abstract models: {model}")
         unique_together = getattr(meta, 'unique_together', [])
         if unique_together:
             if isinstance(unique_together[0], str):
@@ -287,7 +310,7 @@ class SQLModelSerializer(ModelSerializer):
         return await ModelType.objects.get(_id=state['_id'])
 
     def _default_registry(self):
-        return {m.__model__: m for m in find_subclasses(SQLModel)}
+        return {m.__model__: m for m in find_sql_models()}
 
 
 class SQLModelManager(ModelManager):
@@ -310,7 +333,7 @@ class SQLModelManager(ModelManager):
 
     def create_tables(self):
         tables = {}
-        for cls in find_subclasses(SQLModel):
+        for cls in find_sql_models():
             table = cls.__table__
             if table is None:
                 table = cls.__table__ = create_table(cls, self.metadata)
@@ -663,25 +686,39 @@ class SQLMeta(ModelMeta):
 
         # Set the pk name
         cls.__pk__ = (cls._id.metadata or {}).get('name', cls._id.name)
+
+        # Set to the sqlalchemy Table
         cls.__table__ = None
 
         # Will be set to the table model by manager, not done here to avoid
         # import errors that may occur
         cls.__backrefs__ = set()
 
-        # If a Meta class is defined check it's validity
-        opts = dct.get('Meta', None)
-        if opts is not None:
-            for f in dir(opts):
+        # If a Meta class is defined check it's validity and if extending
+        # do not inherit the abstract attribute
+        Meta = dct.get('Meta', None)
+        if Meta is not None:
+            for f in dir(Meta):
                 if f.startswith('_'):
                     continue
                 if f not in VALID_META_FIELDS:
                     raise TypeError(
                         f'{f} is not a valid Meta field on {cls}.')
 
-            db_table = getattr(opts, 'db_table', None)
+            db_table = getattr(Meta, 'db_table', None)
             if db_table:
                 cls.__model__ = db_table
+
+        # If this inherited from an abstract model but didn't specify
+        # Meta info make the subclass not abstract unless it was redefined
+        base_meta = getattr(cls, 'Meta', None)
+        if base_meta and getattr(base_meta, 'abstract', None):
+            if not Meta:
+                class Meta(base_meta):
+                    abstract = False
+                cls.Meta = Meta
+            elif getattr(Meta, 'abstract', None) is None:
+                Meta.abstract = False
 
         return cls
 

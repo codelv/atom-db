@@ -484,3 +484,49 @@ def test_invalid_multiple_pk():
             id = Int().tag(primary_key=True)
             id2 = Int().tag(primary_key=True)
 
+
+def test_abstract_tables():
+
+    class AbstractUser(SQLModel):
+        name = Str().tag(length=60)
+
+        class Meta:
+            abstract = True
+
+    class CustomUser(AbstractUser):
+        data = Dict()
+
+    class CustomUserWithMeta(AbstractUser):
+        data = Dict()
+        class Meta:
+            db_table = 'custom_user'
+
+    class AbstractCustomUser(AbstractUser):
+        data = Dict()
+        class Meta(AbstractUser.Meta):
+            db_table = 'custom_user2'
+
+    class CustomUser2(AbstractCustomUser):
+        pass
+
+    class CustomUser3(AbstractCustomUser):
+        class Meta(AbstractCustomUser.Meta):
+            abstract = False
+
+    # Attempts to invoke create_table on abstract models should fail
+    with pytest.raises(NotImplementedError):
+        AbstractUser.objects
+
+    # Subclasses of abstract models become concrete so this is ok
+    assert CustomUser.objects
+
+    # Subclasses of abstract models become with Meta concrete so this is ok
+    assert CustomUserWithMeta.objects
+
+    # Subclasses that inherit Meta, inherit Meta :)
+    with pytest.raises(NotImplementedError):
+        AbstractCustomUser.objects  # Abstract is inherited in this case
+
+    # This is okay too
+    CustomUser2.objects
+    CustomUser3.objects
