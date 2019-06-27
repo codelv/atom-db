@@ -4,7 +4,7 @@
 atom-db is a database abstraction layer for the
 [atom](https://github.com/nucleic/atom) framework. This package provides api's for
 seamlessly saving and restoring atom objects from json based document databases
-and (coming soon) SQL databases supported by sqlalchemy.
+and SQL databases supported by sqlalchemy.
 
 
 ### Why?
@@ -122,8 +122,19 @@ look for these and assign it to the `__pk__` of the class. If none is specified
 it will create and use `_id` as the primary key. If another member is specified
 as the pk, the `_id` member will be redefined to alias the actual primary key.
 
-Table names can be redefined by setting the `__model__ = "<table name>"`, by
-default it uses the fqdn of the class.
+Like in Django a nested `Meta` class  can be added to specify the `db_name`
+and `unique_together` constraints. The table name defaults to the qualname of the class,
+eg `myapp.SomeModel` if no Meta or `__model__` is specified.
+
+```python
+class SomeModel(SQLModel):
+    # ...
+
+    class Meta:
+        db_table = 'custom_table_name'
+
+```
+
 
 #### DB engine
 
@@ -177,7 +188,6 @@ await User.objects.create()
 
 ```
 
-
 #### ORM like queries
 
 Only very basic ORM style queries are implemented for common use cases. These
@@ -215,7 +225,6 @@ See [sqlachemy's ColumnElement](https://docs.sqlalchemy.org/en/latest/core/sqlel
 for which queries can be used in this way.  Also the tests check that these
 actually work as intended.
 
-
 #### Advanced / raw queries
 
 For more advanced queries using joins, etc.. you must build the query with
@@ -244,6 +253,25 @@ for row in await Job.objects.fetchall(q):
 Depending on the relationships, you may need to then post-process these so they
 can be accessed in a more pythonic way. This is trade off between complexity
 and ease of use.
+
+### Migrations
+
+It works with [alembic](https://alembic.sqlalchemy.org/en/latest/autogenerate.html). The metadata needed
+to autogenerate migrations can be retrieved from `SQLModelManager.instance().metadata` so add the following
+in your alembic's env.py:
+
+```python
+# Import your db models first
+from myapp.models import *
+
+from atomdb.sql import SQLModelManager
+manager = SQLModelManager.instance()
+manager.create_tables()  # Create sa tables
+target_metadata = manager.metadata
+
+```
+
+The rest is handled by alembic.
 
 
 ### Contributing
