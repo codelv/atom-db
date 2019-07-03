@@ -390,3 +390,35 @@ class Model(with_metaclass(ModelMeta, Atom)):
     async def delete(self):
         """ Alias to delete this object in the database """
         raise NotImplementedError
+
+
+class JSONSerializer(ModelSerializer):
+    def flatten_object(self, obj, scope):
+        """ Flatten to just json but add in keys to know how to restore it.
+
+        """
+        ref = obj.__ref__
+        if ref in scope:
+            return {'__ref__': ref, '__model__': obj.__model__}
+        else:
+            scope[ref] = obj
+        state = obj.__getstate__(scope)
+        _id = state.get("_id")
+        return {'_id': _id,
+                '__ref__': ref,
+                '__model__': state['__model__']} if _id else state
+
+    def _default_registry(self):
+        return {m.__model__: m for m in find_subclasses(JSONModel)}
+
+
+class JSONModel(Model):
+    """ A simple model that can be serialized to json. Useful for embedding
+    within other objects.
+
+    """
+    serializer = JSONSerializer.instance()
+
+    #: JSON cannot encode bytes
+    _id = Unicode()
+    __ref__ = Unicode(factory=lambda: (b'%0x' % getrandbits(30 * 4)).decode())

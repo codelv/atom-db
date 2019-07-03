@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='atom-db',
-    version='0.2.0',
+    version='0.2.2dev',
     author='CodeLV',
     author_email='frmdstryr@gmail.com',
     url='https://github.com/codelv/atom-db',
