@@ -527,7 +527,7 @@ class SQLTableProxy(Atom):
             return (obj, False)
         state = {k: v for k, v in filters.items() if '__' not in k}
         obj = self.model(**state)
-        await obj.save()
+        await obj.save(force_insert=True)
         return (obj, True)
 
     async def count(self, **filters):
