@@ -28,7 +28,8 @@ from sqlalchemy import func
 
 
 from .base import (
-    ModelManager, ModelSerializer, Model, ModelMeta, find_subclasses
+    ModelManager, ModelSerializer, Model, ModelMeta, find_subclasses,
+    JSONSerializer
 )
 
 
@@ -310,8 +311,11 @@ class SQLModelSerializer(ModelSerializer):
         return await ModelType.objects.get(_id=state['_id'])
 
     def _default_registry(self):
-        return {m.__model__: m for m in find_sql_models()}
-
+        """ Add all sql and json models to the registry
+        """
+        registry = JSONSerializer.instance().registry.copy()
+        registry.update({m.__model__: m for m in find_sql_models()})
+        return registry
 
 class SQLModelManager(ModelManager):
     """ Manages models via aiopg, aiomysql, or similar libraries supporting
