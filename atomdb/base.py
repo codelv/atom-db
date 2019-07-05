@@ -19,6 +19,8 @@ from atom.atom import AtomMeta, with_metaclass
 from atom.dict import _DictProxy
 from random import getrandbits
 from pprint import pformat
+from base64 import b64encode, b64decode
+from datetime import date, time, datetime
 
 
 logger = logging.getLogger('atomdb')
@@ -43,6 +45,14 @@ class ModelSerializer(Atom):
 
     #: Store all registered models
     registry = Dict()
+
+    #: Mapping of type name to coercer function
+    coercers = Dict(default={
+        'datetime.date': lambda s: date(**s),
+        'datetime.datetime': lambda s: datetime(**s),
+        'datetime.time': lambda s: time(**s),
+        'bytes': lambda s: b64decode(s['bytes']),
+    })
 
     @classmethod
     def instance(cls):
@@ -129,6 +139,14 @@ class ModelSerializer(Atom):
             if name is not None:
                 cls = self.registry[name]
                 return await cls.serializer.unflatten_object(cls, v, scope)
+
+            # Convert py types
+            py_type = v.pop('__py__', None)
+            if py_type:
+                coercer = self.coercers.get(py_type)
+                if coercer:
+                    return coercer(v)
+
             return {k: await unflatten(i, scope) for k, i in v.items()}
         elif isinstance(v, (list, tuple)):
             return [await unflatten(item, scope) for item in v]
@@ -393,6 +411,36 @@ class Model(with_metaclass(ModelMeta, Atom)):
 
 
 class JSONSerializer(ModelSerializer):
+
+    def flatten(self, v, scope=None):
+        """ Flatten date, datetime, time, and bytes as a dict with a __py__
+        field and arguments to reconstruct it.
+
+        """
+        if isinstance(v, (date, datetime, time)):
+            # This is inefficient space wise but still allows queries
+            py_type = f'{v.__class__.__module__}.{v.__class__.__name__}'
+            s = {'__py__': py_type}
+            if isinstance(v, (date, datetime)):
+                s.update({
+                    'year': v.year,
+                    'month': v.month,
+                    'day': v.day
+                })
+            if isinstance(v, (time, datetime)):
+                s.update({
+                    'hour': v.hour,
+                    'minute': v.minute,
+                    'second': v.second,
+                    'microsecond': v.microsecond,
+                    # TODO: Timezones
+                })
+            return s
+        if isinstance(v, bytes):
+            py_type = 'bytes'
+            return {'__py__': 'bytes', 'bytes': b64encode(v)}
+        return super().flatten(v, scope)
+
     def flatten_object(self, obj, scope):
         """ Flatten to just json but add in keys to know how to restore it.
 
@@ -407,6 +455,12 @@ class JSONSerializer(ModelSerializer):
         return {'_id': _id,
                 '__ref__': ref,
                 '__model__': state['__model__']} if _id else state
+
+    async def get_object_state(self, obj,  state, scope):
+        """ State should be contained in the dict
+
+        """
+        return state
 
     def _default_registry(self):
         return {m.__model__: m for m in find_subclasses(JSONModel)}
