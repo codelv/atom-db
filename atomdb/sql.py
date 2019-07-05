@@ -877,10 +877,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
-                #if not r.rowcount:
-                #    raise sa.exc.InvalidRequestError(
-                #        f'Cannot update "{self}", no rows with pk={self._id} '
-                #        f'exist.')
+                if not r.rowcount:
+                    log.warning(
+                        f'Did not update "{self}", either no rows with '
+                        f'pk={self._id} exist or it has not changed.')
             else:
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
