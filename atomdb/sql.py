@@ -91,7 +91,10 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     if issubclass(cls, Model):
         name = f'{cls.__model__}.{cls.__pk__}'
         cls.__backrefs__.add((model, member))
-        return (sa.Integer, sa.ForeignKey(name, **kwargs))
+
+        # Determine the type of the foreign key
+        column = create_table_column(cls, cls._id)
+        return (column.type, sa.ForeignKey(name, **kwargs))
     elif issubclass(cls, str):
         return sa.String(**kwargs)
     elif issubclass(cls, int):
@@ -316,6 +319,7 @@ class SQLModelSerializer(ModelSerializer):
         registry = JSONSerializer.instance().registry.copy()
         registry.update({m.__model__: m for m in find_sql_models()})
         return registry
+
 
 class SQLModelManager(ModelManager):
     """ Manages models via aiopg, aiomysql, or similar libraries supporting

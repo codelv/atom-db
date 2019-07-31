@@ -1,3 +1,6 @@
+# 0.2.2
+
+Fix bug with fk types
 
 # 0.2.1
 
