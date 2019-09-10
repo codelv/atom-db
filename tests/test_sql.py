@@ -209,10 +209,14 @@ async def test_query(db):
 async def test_get_or_create(db):
     try:
         await User.objects.drop()
+        await Job.objects.drop()
+        await JobRole.objects.drop()
     except Exception as e:
         if 'Unknown table' not in str(e):
             raise
     await User.objects.create()
+    await Job.objects.create()
+    await JobRole.objects.create()
 
     name = faker.name()
     email = faker.email()
@@ -226,6 +230,18 @@ async def test_get_or_create(db):
         name=user.name, email=user.email)
     assert u._id == user._id
     assert not created and user.name == name and user.email == user.email
+
+    # Test passing model
+    job, created = await Job.objects.get_or_create(name=faker.job())
+    assert job and created
+
+    role, created = await JobRole.objects.get_or_create(
+        job=job, name=faker.job())
+    assert role and created and role.job._id == job._id
+
+    role_check, created = await JobRole.objects.get_or_create(
+        job=job, name=role.name)
+    assert role_check._id == role._id and not created
 
 
 @pytest.mark.asyncio
@@ -530,3 +546,4 @@ def test_abstract_tables():
     # This is okay too
     CustomUser2.objects
     CustomUser3.objects
+
