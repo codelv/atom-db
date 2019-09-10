@@ -582,7 +582,7 @@ class SQLTableProxy(Atom):
                 args = k.split('__')
                 if len(args) > 2:
                     raise NotImplementedError(
-                        "Related lookups are not supported, build queries"
+                        "Related lookups are not supported, build queries "
                         "manually using Model.objects.table.select()...")
                 field, op = args
             else:
@@ -601,7 +601,7 @@ class SQLTableProxy(Atom):
                 q = q.where(getattr(col, '__%s__' % op)(v))
             else:
                 raise NotImplementedError(
-                    "%s operator is unknown or not supported. Build them"
+                    "%s operator is unknown or not supported. Build them "
                     "manually using Model.objects.table.select()..." % op)
         return q
 
