@@ -575,6 +575,8 @@ class SQLTableProxy(Atom):
         columns = self.table.c
         for k, v in filters.items():
             op = 'eq'
+            if isinstance(v, Model):
+                v = v.serializer.flatten_object(v, scope=None)
             if '__' in k:
                 #: TODO: Support related lookups
                 args = k.split('__')
