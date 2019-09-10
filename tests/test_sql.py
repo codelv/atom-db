@@ -48,6 +48,10 @@ class Image(SQLModel):
     path = Unicode().tag(length=200)
     metadata = Typed(dict).tag(nullable=True)
     alpha = Range(low=0, high=255)
+    data = Instance(bytes).tag(nullable=True)
+
+    # Maps to sa.ARRAY, must include the item_type tag
+    size = Instance(tuple).tag(nullable=True, item_type=int)
 
 
 class Page(SQLModel):
