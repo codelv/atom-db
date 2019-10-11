@@ -180,10 +180,10 @@ SQLModelManager.instance().create_tables()
 # Now actually drop/create for each of your models
 
 # Drop the table for this model (will raise sqlalchemy's error if it doesn't exist)
-await User.objects.drop()
+await User.objects.drop_table()
 
 # Create the user table
-await User.objects.create()
+await User.objects.create_table()
 
 
 ```

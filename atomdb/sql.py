@@ -19,7 +19,7 @@ from atom import api
 from atom.atom import AtomMeta, with_metaclass
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance
+    ForwardInstance, Value
 )
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
@@ -112,7 +112,7 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     elif issubclass(cls, datetime.time):
         return sa.Time(**kwargs)
     elif issubclass(cls, (bytes, bytearray)):
-        return sa.Binary(**kwargs)
+        return sa.LargeBinary(**kwargs)
     raise NotImplementedError(
         f"A type for {member.name} of {model} ({cls}) could not be "
         f"determined automatically, please specify it manually by tagging it "
@@ -340,6 +340,9 @@ class SQLModelManager(ModelManager):
         return sa.MetaData(SQLBinding(manager=self))
 
     def create_tables(self):
+        """ Create sqlalchemy tables for all registered SQLModels
+
+        """
         tables = {}
         for cls in find_sql_models():
             table = cls.__table__
@@ -388,6 +391,20 @@ class SQLModelManager(ModelManager):
         return dialect_cls(**dialect_args)
 
 
+class ConnectionProxy(Atom):
+    """ An wapper for a connection to be used with async with syntax that
+    does nothing but passes the exisiting connection when entered.
+
+    """
+    connection = Value()
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        pass
+
+
 class SQLTableProxy(Atom):
     #: Table this is a proxy to
     table = Instance(sa.Table)
@@ -398,15 +415,33 @@ class SQLTableProxy(Atom):
     #: Cache of pk: obj using weakrefs
     cache = Typed(weakref.WeakValueDictionary, ())
 
+    #: Key used to pull the connection out of filter kwargs
+    connection_kwarg = Str('connection')
+
     @property
     def engine(self):
         return self.table.bind.manager.database
 
-    @property
-    def connection(self):
-        return self.engine.acquire
+    def connection(self, connection=None):
+        """ Create a new connection or the return given connection as an async
+        contextual object.
 
-    def create(self):
+        Parameters
+        ----------
+        connection: Database connection or None
+            The connection to return
+
+        Returns
+        -------
+        connection: Database connection
+            The database connection or one that may be used with async with
+
+        """
+        if connection is None:
+            return self.engine.acquire()
+        return ConnectionProxy(connection=connection)
+
+    def create_table(self):
         """ A wrapper for create which catches the create queries then executes
         them
         """
@@ -414,7 +449,7 @@ class SQLTableProxy(Atom):
         table.create()
         return table.bind.wait()
 
-    def drop(self):
+    def drop_table(self):
         table = self.table
         table.drop()
         return table.bind.wait()
@@ -423,13 +458,15 @@ class SQLTableProxy(Atom):
         async with self.connection() as conn:
             return await conn.execute(*args, **kwargs)
 
-    async def fetchall(self, query):
+    async def fetchall(self, query, connection=None):
         """ Fetch all results for the query.
 
         Parameters
         ----------
         query: String or Query
             The query to execute
+        connection: Database connection
+            The connection to use or a new one will be created
 
         Returns
         -------
@@ -437,23 +474,67 @@ class SQLTableProxy(Atom):
             List of rows returned, NOT objects
 
         """
-        async with self.connection() as conn:
+        async with self.connection(connection) as conn:
             r = await conn.execute(query)
             return await r.fetchall()
 
-    async def fetchmany(self, query, size=None):
-        async with self.connection() as conn:
+    async def fetchmany(self, query, size=None, connection=None):
+        """ Fetch size results for the query.
+
+        Parameters
+        ----------
+        query: String or Query
+            The query to execute
+        size: Int or None
+            The number of results to fetch
+        connection: Database connection
+            The connection to use or a new one will be created
+
+        Returns
+        -------
+        rows: List
+            List of rows returned, NOT objects
+
+        """
+        async with self.connection(connection) as conn:
             r = await conn.execute(query)
             return await r.fetchmany(size)
 
-    async def fetchone(self, query):
-        async with self.connection() as conn:
-            r = await conn.execute(query)
-            row = await r.fetchone()
-            return row
+    async def fetchone(self, query, connection=None):
+        """ Fetch a single result for the query.
 
-    async def scalar(self, query):
-        async with self.connection() as conn:
+        Parameters
+        ----------
+        query: String or Query
+            The query to execute
+        connection: Database connection
+            The connection to use or a new one will be created
+
+        Returns
+        -------
+        rows: Object or None
+            The row returned or None
+        """
+        async with self.connection(connection) as conn:
+            r = await conn.execute(query)
+            return await r.fetchone()
+
+    async def scalar(self, query, connection=None):
+        """ Fetch the scalar result for the query.
+
+        Parameters
+        ----------
+        query: String or Query
+            The query to execute
+        connection: Database connection
+            The connection to use or a new one will be created
+
+        Returns
+        -------
+        result: Object or None
+            The the first column of the first row or None
+        """
+        async with self.connection(connection) as conn:
             r = await conn.execute(query)
             return await r.scalar()
 
@@ -473,7 +554,9 @@ class SQLTableProxy(Atom):
         """
         restore = self.model.restore
         q = self.query(self.table.select(), **filters)
-        return [await restore(row) for row in await self.fetchall(q)]
+        connection = filters.get(self.connection_kwarg)
+        return [await restore(row)
+                for row in await self.fetchall(q, connection=connection)]
 
     async def delete(self, **filters):
         """ Delete the objects matching the given filters
@@ -490,12 +573,12 @@ class SQLTableProxy(Atom):
 
         """
         q = self.query(self.table.delete(), **filters)
-        async with self.connection() as conn:
-            r = await conn.execute(q)
-            return r
+        connection = filters.get(self.connection_kwarg)
+        async with self.connection(connection) as conn:
+            return await conn.execute(q)
 
-    async def all(self):
-        return await self.filter()
+    async def all(self, **kwargs):
+        return await self.filter(**kwargs)
 
     async def get(self, **filters):
         """ Get a model matching the given criteria
@@ -512,8 +595,9 @@ class SQLTableProxy(Atom):
 
         """
         q = self.query(self.table.select(), **filters)
-        row = await self.fetchone(q)
-        if row:
+        connection = filters.get(self.connection_kwarg)
+        row = await self.fetchone(q, connection=connection)
+        if row is not None:
             return await self.model.restore(row)
 
     async def get_or_create(self, **filters):
@@ -533,17 +617,42 @@ class SQLTableProxy(Atom):
         obj = await self.get(**filters)
         if obj is not None:
             return (obj, False)
-        state = {k: v for k, v in filters.items() if '__' not in k}
+        connection_kwarg = self.connection_kwarg
+        connection = filters.get(connection_kwarg)
+        state = {k: v for k, v in filters.items()
+                 if '__' not in k and k != connection_kwarg}
         obj = self.model(**state)
-        await obj.save(force_insert=True)
+        await obj.save(force_insert=True, connection=connection)
         return (obj, True)
+
+    async def create(self, **state):
+        """ Create a and save model with the given state.
+
+        The connection parameter is popped from this state.
+
+        Parameters
+        ----------
+        state: Dict
+            The state to use to initialize the object.
+
+        Returns
+        -------
+        result: Tuple[Model, Bool]
+            A tuple of the object and a bool indicating if it was just created
+
+        """
+        connection = state.pop(self.connection_kwarg, None)
+        obj = self.model(**state)
+        await obj.save(force_insert=True, connection=connection)
+        return obj
 
     async def count(self, **filters):
         """ Return a count of objects in the table matching the given filters
 
         """
         q = self.query(self.table.count(), **filters)
-        return await self.scalar(q)
+        connection = filters.get(self.connection_kwarg)
+        return await self.scalar(q, connection=connection)
 
     def query(self, __q__=None, **filters):
         """ Build a django-style query by adding a where clause to the given
@@ -573,7 +682,10 @@ class SQLTableProxy(Atom):
         if not filters:
             return q
         columns = self.table.c
+        connection_kwarg = self.connection_kwarg
         for k, v in filters.items():
+            if k == connection_kwarg:
+                continue # Skip the connection parameter if given
             op = 'eq'
             if isinstance(v, Model):
                 v = v.serializer.flatten_object(v, scope=None)

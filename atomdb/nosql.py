@@ -12,7 +12,9 @@ Created on Jun 12, 2018
 import bson
 import weakref
 from atom.api import Atom, Instance, Value, Dict, Typed
-from .base import ModelManager, ModelSerializer, Model, find_subclasses
+from .base import (
+    ModelManager, ModelSerializer, Model, find_subclasses, JSONSerializer
+)
 
 
 class NoSQLModelSerializer(ModelSerializer):
@@ -55,7 +57,11 @@ class NoSQLModelSerializer(ModelSerializer):
                 '__model__': state['__model__']} if _id else state
 
     def _default_registry(self):
-        return {m.__model__: m for m in find_subclasses(NoSQLModel)}
+        """ Add all nosql and json models to the registry
+        """
+        registry = JSONSerializer.instance().registry.copy()
+        registry.update({m.__model__: m for m in find_subclasses(NoSQLModel)})
+        return registry
 
 
 class NoSQLDatabaseProxy(Atom):
@@ -160,5 +166,3 @@ class NoSQLModel(Model):
             del db.cache[pk]
             del self._id
             return r
-
-

@@ -13,6 +13,7 @@ from datetime import datetime, date, time
 from faker import Faker
 from pprint import pprint
 
+from pymysql.err import IntegrityError
 
 faker = Faker()
 
@@ -34,7 +35,7 @@ class User(SQLModel):
 
 
 class Job(SQLModel):
-    name = Unicode().tag(length=64)
+    name = Unicode().tag(length=64, unique=True)
     roles = Relation(lambda: JobRole)
 
 
@@ -110,6 +111,16 @@ def test_custom_table_name():
     assert Test.objects.table.name == table_name
 
 
+async def reset_tables(*models):
+    for Model in models:
+        try:
+            await Model.objects.drop_table()
+        except Exception as e:
+            if 'Unknown table' not in str(e):
+                raise
+        await Model.objects.create_table()
+
+
 @pytest.fixture
 async def db(event_loop):
     m = re.match(r'mysql://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
@@ -136,21 +147,16 @@ async def db(event_loop):
 @pytest.mark.asyncio
 async def test_drop_create_table(db):
     try:
-        await User.objects.drop()
+        await User.objects.drop_table()
     except Exception as e:
         if 'Unknown table' not in str(e):
             raise
-    await User.objects.create()
+    await User.objects.create_table()
 
 
 @pytest.mark.asyncio
 async def test_simple_save_restore_delete(db):
-    try:
-        await User.objects.drop()
-    except Exception as e:
-        if 'Unknown table' not in str(e):
-            raise
-    await User.objects.create()
+    await reset_tables(User)
 
     # Save
     user = User(name=faker.name(), email=faker.email(), active=True)
@@ -187,7 +193,7 @@ async def test_simple_save_restore_delete(db):
 
 @pytest.mark.asyncio
 async def test_query(db):
-    await User.objects.create()
+    await reset_tables(User)
 
     # Create second user
     for i in range(10):
@@ -211,16 +217,7 @@ async def test_query(db):
 
 @pytest.mark.asyncio
 async def test_get_or_create(db):
-    try:
-        await User.objects.drop()
-        await Job.objects.drop()
-        await JobRole.objects.drop()
-    except Exception as e:
-        if 'Unknown table' not in str(e):
-            raise
-    await User.objects.create()
-    await Job.objects.create()
-    await JobRole.objects.create()
+    await reset_tables(User, Job, JobRole)
 
     name = faker.name()
     email = faker.email()
@@ -249,8 +246,75 @@ async def test_get_or_create(db):
 
 
 @pytest.mark.asyncio
+async def test_create(db):
+    await reset_tables(Job, JobRole)
+
+    job = await Job.objects.create(name=faker.job())
+    assert job and job._id
+
+    # DB should enforce unique ness
+    with pytest.raises(IntegrityError):
+        same_job = await Job.objects.create(name=job.name)
+
+
+@pytest.mark.asyncio
+async def test_transaction_rollback(db):
+    await reset_tables(Job, JobRole)
+
+    with pytest.raises(ValueError):
+        async with Job.objects.connection() as conn:
+            trans = await conn.begin()
+            try:
+                # Must pass in the connection parameter for transactions
+                job = await Job.objects.create(name=faker.job(), connection=conn)
+                assert job._id is not None
+                for i in range(3):
+                    role = await JobRole.objects.create(job=job, name=faker.job(),
+                                                connection=conn)
+                    assert role._id is not None
+                complete = True
+                raise ValueError("Oh crap, I didn't want to do that")
+            except:
+                await trans.rollback()
+                rollback = True
+                raise
+            else:
+                rollback = False
+                await trans.commit()
+
+    assert complete and rollback
+    assert len(await Job.objects.all()) == 0
+    assert len(await JobRole.objects.all()) == 0
+
+
+@pytest.mark.asyncio
+async def test_transaction_commit(db):
+    await reset_tables(Job, JobRole)
+
+    async with Job.objects.connection() as conn:
+        trans = await conn.begin()
+        try:
+            # Must pass in the connection parameter for transactions
+            job = await Job.objects.create(name=faker.job(), connection=conn)
+            assert job._id is not None
+            for i in range(3):
+                role = await JobRole.objects.create(job=job, name=faker.job(),
+                                            connection=conn)
+                assert role._id is not None
+        except:
+            await trans.rollback()
+            raise
+        else:
+            await trans.commit()
+
+    assert len(await Job.objects.all()) == 1
+    assert len(await JobRole.objects.all()) == 3
+
+
+@pytest.mark.asyncio
 async def test_filters(db):
-    await User.objects.create()
+    await reset_tables(User)
+
     user, created = await User.objects.get_or_create(
         name=faker.name(), email=faker.email(), age=21, active=True)
     assert created
@@ -295,7 +359,8 @@ async def test_column_rename(db):
     """ Columns can be tagged with custom names. Verify that it works.
 
     """
-    await Email.objects.create()
+    await reset_tables(Email)
+
     e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
     await e.save()
 
@@ -317,8 +382,7 @@ async def test_column_rename(db):
 
 @pytest.mark.asyncio
 async def test_query_many_to_one(db):
-    await Job.objects.create()
-    await JobRole.objects.create()
+    await reset_tables(Job, JobRole)
 
     jobs = []
 
@@ -367,7 +431,7 @@ async def test_query_many_to_one(db):
 
 @pytest.mark.asyncio
 async def test_save_errors(db):
-    await User.objects.create()
+    await reset_tables(User)
 
     u = User()
     with pytest.raises(ValueError):
@@ -381,7 +445,8 @@ async def test_save_errors(db):
 
 @pytest.mark.asyncio
 async def test_object_caching(db):
-    await Email.objects.create()
+    await reset_tables(Email)
+
     e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
     await e.save()
     pk = e._id
@@ -397,95 +462,6 @@ async def test_object_caching(db):
     # Make sure cache was cleaned up
     aref = Email.objects.cache.get(pk)
     assert aref is None, 'Cached object was not released'
-
-
-@pytest.mark.skip(reason="Not implemented")
-@pytest.mark.asyncio
-async def test_nested_save_restore(db):
-    await Image.objects.create()
-    await User.objects.create()
-    await Page.objects.create()
-    await Comment.objects.create()
-
-    authors = [
-        User(name=faker.name(), active=True) for i in range(2)
-    ]
-    for a in authors:
-        await a.save()
-
-    images = [
-        Image(name=faker.job(), path=faker.image_url()) for i in range(10)
-    ]
-
-    # Only save the first few, it should serialize the others
-    for i in range(3):
-        await images[i].save()
-
-    pages = [
-        Page(title=faker.catch_phrase(), body=faker.text(), author=author,
-             images=[faker.random.choice(images) for j in range(faker.random.randint(0, 2))],
-             status=faker.random.choice(Page.status.items))
-        for i in range(4) for author in authors
-    ]
-    for p in pages:
-        await p.save()
-
-        # Generate comments
-        comments = []
-        for i in range(faker.random.randint(1, 10)):
-            commentor = User(name=faker.name())
-            await commentor.save()
-            comment = Comment(author=commentor, page=p,
-                              status=faker.random.choice(Comment.status.items),
-                              reply_to=faker.random.choice([None]+comments),
-                              body=faker.text())
-            comments.append(comment)
-            await comment.save()
-
-    for p in pages:
-        # Find in db
-        state = await Page.objects.find_one({'author._id': p.author._id,
-                                             'title': p.title})
-        assert state, f'Couldnt find page by {p.title} by {p.author.name}'
-        r = await Page.restore(state)
-        assert p._id == r._id
-        assert p.author._id == r.author._id
-        assert p.title == r.title
-        assert p.body == r.body
-        for img_1, img_2 in zip(p.images, r.images):
-            assert img_1.path == img_2.path
-
-        async for state in Comment.objects.find({'page._id': p._id}):
-            comment = await Comment.restore(state)
-            assert comment.page._id == p._id
-            async for state in Comment.objects.find({'reply_to._id':
-                                                         comment._id}):
-                reply = await Comment.restore(state)
-                assert reply.page._id == p._id
-
-
-@pytest.mark.skip(reason="Not implemented")
-@pytest.mark.asyncio
-async def test_circular(db):
-    # Test that a circular reference is properly stored as a reference
-    # and doesn't create an infinite loop
-    await Page.objects.drop()
-
-    p = Page(title=faker.catch_phrase(), body=faker.text())
-    related_page = Page(title=faker.catch_phrase(), body=faker.text(),
-                        related=[p])
-
-    # Create a circular reference
-    p.related = [related_page]
-    await p.save()
-
-    # Make sure it restores properly
-    state = await Page.objects.find_one({'_id': p._id})
-    pprint(state)
-    r = await Page.restore(state)
-    assert r.title == p.title
-    assert r.related[0].title == related_page.title
-    assert r.related[0].related[0] == r
 
 
 def test_invalid_meta_field():
