@@ -1,4 +1,8 @@
 
+# 0.3.1
+
+- Support lookups using renamed column fields
+
 # 0.3.0
 
 - The create and drop have been renamed to `create_table` and `drop_table` respectively.

@@ -700,7 +700,13 @@ class SQLTableProxy(Atom):
             else:
                 field = k
 
-            col = columns[field]
+            try:
+                col = columns[field]
+            except KeyError:
+                # If the field has a different name assigned use that
+                member = getattr(self.model, field)
+                field = member.metadata['name']
+                col = columns[field]
 
             if hasattr(col, op):
                 # Like, contains, endswith, etc...
