@@ -138,7 +138,7 @@ async def db(event_loop):
         host=host, port=int(port), user=user, password=pwd, loop=event_loop)
 
     if schema == 'mysql':
-        params['autocommit'] =True
+        params['autocommit'] = True
 
     # Create the DB
     async with connect(**params) as conn:
@@ -147,7 +147,12 @@ async def db(event_loop):
             await c.execute('DROP DATABASE IF EXISTS %s;' % db)
             await c.execute('CREATE DATABASE %s;' % db)
 
-    async with create_engine(db=db, **params) as engine:
+    if schema == 'mysql':
+        params['db'] = db
+    elif schema == 'postgres':
+        params['dbname'] = db
+
+    async with create_engine(**params) as engine:
         mgr = SQLModelManager.instance()
         mgr.database = engine
         yield engine
