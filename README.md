@@ -18,21 +18,10 @@ but has been pulled out to a separate package.
 
 ### Overview
 
-It an async ORM built on [atom](https://github.com/nucleic/atom) which provides
-change notification and type enforcment and lower memory footprint.
-
-
-With SQL Support
-
 - Supports MySQL and Postgres
 - Uses django like queries or raw sqlalchemy queries
 - Works with alembic database migrations
-
-
-And NoSQL Support
-
 - Supports MongoDB using motor
-
 
 It's still in development....
 
