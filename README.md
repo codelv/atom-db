@@ -41,7 +41,7 @@ It's still in development....
 
 The design is based somewhat on django.
 
-There is a "manager" `Model.objects` do queries on the database table
+There is a "manager" called `Model.objects` to do queries on the database table
 created for each subclass.
 
 Serialization and deserialization is done with `Model.serializer`
@@ -55,31 +55,45 @@ re-implemented (setstate is async).
 
 You can use atom-db to save and restore atom subclasses to MySQL and Postgres.
 
+Just define models using atom members, but subclass the SQLModel and atom-db
+will convert the builtin atom members of your model to sqlalchemy table columns
+and create an sqlalchemy.Table for your model.
 
-### Example SQL with aiomysql / aiopg
 
-Just define models using atom members, but subclass the SQLModel.
+### Customizing table creation
 
-Tag members with information needed for sqlalchemy tables, ex
-`Str().tag(length=40)` will make a `sa.String(40)`.
-See https://docs.sqlalchemy.org/en/latest/core/type_basics.html. Tagging with
-`store=False` will make the member be excluded from the db.
+To customize how table columns are created you can tag members with information
+needed for sqlalchemy columns, ex `Str().tag(length=40)` will make a `sa.String(40)`.
+See https://docs.sqlalchemy.org/en/latest/core/type_basics.html. Tagging any
+member with `store=False` will make the member be excluded from the db.
 
 atomdb will attempt to determine the proper column type, but if you need more
 control, you can tag the member to specify the column type with
 `type=sa.<type>` or specify the full column definition with
-`column=sa.Column(...)`.  See the tests for examples.
+`column=sa.Column(...)`.
 
-You can tag a member with `primary_key=True` to make it the pk. atomdb will
-look for these and assign it to the `__pk__` of the class. If none is specified
-it will create and use `_id` as the primary key. If another member is specified
-as the pk, the `_id` member will be redefined to alias the actual primary key.
+If you have a custom member, you can define a `def get_column(self, model)`
+or `def get_column_type(self, model)` method to create the table column for the
+given model.
+
+
+##### Primary keys
+
+You can tag a member with `primary_key=True` to make it the pk. If no member
+is tagged with `primary_key` it will create and use `_id` as the primary key.
+The`_id` member will be always to alias to the primary key. Use the `__pk__`
+attribute of the class to get the name of the primary key member.
+
+##### Table name
 
 Like in Django a nested `Meta` class  can be added to specify the `db_name`
-and `unique_together` constraints. The table name defaults to the qualname of the class,
-eg `myapp.SomeModel` if no Meta or `__model__` is specified.
+and `unique_together` constraints. If no `db_name` is specified on a Meta class,
+the table name defaults the what is set in the `__model__` member. This defaults
+to the qualname of the class, eg `myapp.SomeModel`.
+
 
 ```python
+
 class SomeModel(SQLModel):
     # ...
 
@@ -88,16 +102,60 @@ class SomeModel(SQLModel):
 
 ```
 
+###### Table creation / dropping
 
-#### DB engine
-
-Before accessing the DB you must assign a "database engine" to the manager
-like this.
+Once your tables are defined as atom models, create and drop tables using the
+async wrappers on top of sqlalchemy's engine.
 
 ```python
+
+from atomdb.sql import SQLModel, SQLModelManager
+
+# Call create_tables to create sqlalchemy tables. This does NOT write them to
+# the db but ensures that all ForeignKey relations are created
+mgr = SQLModelManager.instance()
+mgr.create_tables()
+
+# Now actually drop/create for each of your models
+
+# Drop the table for this model (will raise sqlalchemy's error if it doesn't exist)
+await User.objects.drop_table()
+
+# Create the user table
+await User.objects.create_table()
+
+
+```
+
+The `mgr.create_tables()` method will create the sqlalchemy tables for each
+imported SQLModel subclass (anything in the manager's `registry` dict). This
+should be called after all of your models are imported so sqlalchemy can
+properly setup any foreign key relations.
+
+The manager also has a `metadata` member which holds the `sqlalchemy.MetaData`
+needed for migrations.
+
+Once the tables are created, they is accessible for each model via
+`Model.objects.table`.
+
+> Note: The sqlachemy table is also assigned to the `__table__` attribute of
+each model class, however this will not be defined until the manager has
+created it.
+
+
+#### Database setup
+
+Before accessing the DB you must assign a "database engine" to the manager's
+`database` member and the manager's `url` must be assigned to a
+`sqlalchemy.engine.url.URL` instance so it knows the database type.
+
+```python
+import os
 import re
 from aiomysql.sa import create_engine
 from atomdb.sql import SQLModelManager
+
+DATABASE_URL = os.environ.get('MYSQL_URL')
 
 # Parse the DB url
 m = re.match(r'mysql://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
@@ -113,35 +171,17 @@ mgr.database = engine
 
 
 ```
-
-This will then be used  by the manager to execute queries.
-
-
-#### Table creation / dropping
-
-Once your tables are defined as atom models, create and drop tables using the
-async wrappers on top of sqlalchemy's engine.
-
-```python
-
-from atomdb.sql import SQLModel, SQLModelManager
-
-# Call create_tables to create sqlalchemy tables. This does NOT write them to
-# the db but ensures that all ForeignKey relations are created
-SQLModelManager.instance().create_tables()
-
-# Now actually drop/create for each of your models
-
-# Drop the table for this model (will raise sqlalchemy's error if it doesn't exist)
-await User.objects.drop_table()
-
-# Create the user table
-await User.objects.create_table()
+This engine will then be used by the manager to execute queries.  You can
+retrive the database engine from any Model by using `Model.objects.engine`.
 
 
-```
+The url is set automatically the the first `os.environ` variable found from the
+keys (`DATABASE_URL`,`POSTGRES_URL`, `MYSQL_URL`) in that order. If none
+of those are set it will raise an error. Instead you must manually assigned one
+via `manager.url = sa.engine.url.make_url('postgres://...')`
 
-#### ORM like queries
+
+#### Django style queries
 
 Only very basic ORM style queries are implemented for common use cases. These
 are `get`, `get_or_create`, `filter`, and `all`. These all accept
@@ -178,14 +218,14 @@ See [sqlachemy's ColumnElement](https://docs.sqlalchemy.org/en/latest/core/sqlel
 for which queries can be used in this way.  Also the tests check that these
 actually work as intended.
 
-#### Advanced / raw queries
+#### Advanced / raw sqlalchemy queries
 
 For more advanced queries using joins, etc.. you must build the query with
 sqlalchemy then execute it. The `sa.Table` for an atom model can be retrieved
 using `Model.objects.table` on which you can use select, where, etc... to build
 up whatever query you need.
 
-Then use `fetchall`, `fetchone`, `fetchmany`, or `execute` to do the query.
+Then use `fetchall`, `fetchone`, `fetchmany`, or `execute` to do these queries.
 
 These methods do NOT return an object but the row from the database so they
 must manually be restored.
@@ -206,6 +246,32 @@ for row in await Job.objects.fetchall(q):
 Depending on the relationships, you may need to then post-process these so they
 can be accessed in a more pythonic way. This is trade off between complexity
 and ease of use.
+
+
+### Connections and Transactions
+
+A connection can be retrieved using `Model.objects.connection()` and used
+like normal aiomysql / aiopg connection. A transaction is done in the same way
+as defined in the docs for those libraries eg.
+
+> Warning: When using a transaction you need to pass the active connection to
+each call or it will use a different connection outside of the transaction!
+
+```python
+
+async with Job.objects.connection() as conn:
+    trans = await conn.begin()
+    try:
+        # Do your queries here and pass the `connection` to each
+        job, created = await Job.objects.get_or_create(connection=conn, **state)
+    except:
+        await trans.rollback()
+        raise
+    else:
+        await trans.commit()
+
+```
+
 
 ### Migrations
 

@@ -14,13 +14,13 @@ import logging
 import datetime
 import weakref
 import sqlalchemy as sa
-from functools import wraps
 from atom import api
 from atom.atom import AtomMeta, with_metaclass
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
     ForwardInstance, Value
 )
+from functools import wraps
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
 from sqlalchemy.orm.query import Query
@@ -155,6 +155,19 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
 
 
 def resolve_member_type(member):
+    """ Determine the type specified on a member to determine ForeignKey
+    relations.
+
+    Parameters
+    ----------
+    member: atom.catom.Member
+        The member to retrieve the type from
+    Returns
+    -------
+    object: Model or object
+        The type specified.
+
+    """
     if hasattr(member, 'resolve'):
         return member.resolve()
     else:
@@ -166,7 +179,10 @@ def atom_member_to_sql_column(model, member, **kwargs):
     See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
 
     """
-    if isinstance(member, api.Str):
+    if hasattr(member, 'get_column_type'):
+        # Allow custom members to define the column type programatically
+        return member.get_column_type(model)
+    elif isinstance(member, api.Str):
         return sa.String(**kwargs)
     elif isinstance(member, api.Unicode):
         return sa.Unicode(**kwargs)
@@ -245,6 +261,10 @@ def create_table_column(model, member):
     1. https://docs.sqlalchemy.org/en/latest/core/types.html
 
     """
+    if hasattr(member, 'get_column'):
+        # Allow custom members to define the column programatically
+        return member.get_column(model)
+
     # Copy the metadata as we modify it
     metadata = member.metadata.copy() if member.metadata else {}
 

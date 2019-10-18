@@ -1,4 +1,10 @@
 
+# 0.3.2
+
+- Support lookups on foreign key fields
+- Add ability to specify `get_column` and `get_column_type` to let `atom.catom.Member`
+    subclasses use custom sql columns if needed.
+
 # 0.3.1
 
 - Support lookups using renamed column fields
