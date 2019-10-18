@@ -135,8 +135,10 @@ async def db(event_loop):
         raise ValueError("Unsupported database schema: %s" % schema)
 
     params = dict(
-        host=host, port=int(port), user=user, password=pwd, loop=event_loop,
-        autocommit=True)
+        host=host, port=int(port), user=user, password=pwd, loop=event_loop)
+
+    if schema == 'mysql':
+        params['autocommit'] =True
 
     # Create the DB
     async with connect(**params) as conn:
