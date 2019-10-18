@@ -8,9 +8,8 @@ and SQL databases supported by sqlalchemy.
 
 
 The main reason for building this is to make it easier have database integration
-with [enaml](https://github.com/nucleic/enaml) applications.  Without this,
-a separate framework is needed to define database models, which is a
-duplication of work.
+with [enaml](https://github.com/nucleic/enaml) applications so a separate
+framework is not needed to define database models.
 
 This was originally a part of [enaml-web](https://github.com/codelv/enaml-web)
 but has been pulled out to a separate package.
@@ -46,7 +45,7 @@ You can use atom-db to save and restore atom subclasses to MySQL and Postgres.
 
 Just define models using atom members, but subclass the SQLModel and atom-db
 will convert the builtin atom members of your model to sqlalchemy table columns
-and create an sqlalchemy.Table for your model.
+and create a `sqlalchemy.Table` for your model.
 
 
 ### Customizing table creation
@@ -70,10 +69,10 @@ given model.
 
 You can tag a member with `primary_key=True` to make it the pk. If no member
 is tagged with `primary_key` it will create and use `_id` as the primary key.
-The`_id` member will be always to alias to the primary key. Use the `__pk__`
+The`_id` member will be always alias to the actual primary key. Use the `__pk__`
 attribute of the class to get the name of the primary key member.
 
-##### Table name
+##### Table metadata
 
 Like in Django a nested `Meta` class  can be added to specify the `db_name`
 and `unique_together` constraints. If no `db_name` is specified on a Meta class,
@@ -91,10 +90,10 @@ class SomeModel(SQLModel):
 
 ```
 
-###### Table creation / dropping
+##### Table creation / dropping
 
-Once your tables are defined as atom models, create and drop tables using the
-async wrappers on top of sqlalchemy's engine.
+Once your tables are defined as atom models, create and drop tables using
+ `create_table` and `drop_table` of `Model.objects` respectively For example:
 
 ```python
 
@@ -124,8 +123,7 @@ properly setup any foreign key relations.
 The manager also has a `metadata` member which holds the `sqlalchemy.MetaData`
 needed for migrations.
 
-Once the tables are created, they is accessible for each model via
-`Model.objects.table`.
+Once the tables are created, they are accessible via `Model.objects.table`.
 
 > Note: The sqlachemy table is also assigned to the `__table__` attribute of
 each model class, however this will not be defined until the manager has
@@ -237,9 +235,6 @@ A connection can be retrieved using `Model.objects.connection()` and used
 like normal aiomysql / aiopg connection. A transaction is done in the same way
 as defined in the docs for those libraries eg.
 
-> Warning: When using a transaction you need to pass the active connection to
-each call or it will use a different connection outside of the transaction!
-
 ```python
 
 async with Job.objects.connection() as conn:
@@ -255,10 +250,16 @@ async with Job.objects.connection() as conn:
 
 ```
 
+When using a transaction you need to pass the active connection to
+each call or it will use a different connection outside of the transaction!
+
+The connection argument is removed from the filters/state. If your model happens
+to have a member named `connection` you can rename the connection argument by 
+with `Model.object.connection_kwarg = 'connection_'` or whatever name you like.
 
 ### Migrations
 
-It works with [alembic](https://alembic.sqlalchemy.org/en/latest/autogenerate.html). The metadata needed
+Migrations work using [alembic](https://alembic.sqlalchemy.org/en/latest/autogenerate.html). The metadata needed
 to autogenerate migrations can be retrieved from `SQLModelManager.instance().metadata` so add the following
 in your alembic's env.py:
 
@@ -278,17 +279,14 @@ The rest is handled by alembic.
 
 # NoSQL support
 
-You can use atom-db to save and restore atom subclasses to MongoDB.
+You can also use atom-db to save and restore atom subclasses to MongoDB.
 
 The NoSQL version is very basic as mongo is much more relaxed. No restriction
 is imposed on what type of manager is used, leaving that to whichever database
 library is preferred but it's tested (and currently used) with [motor](https://motor.readthedocs.io/en/stable/)
 and [tornado](https://www.tornadoweb.org/en/stable/index.html).
 
-
-### Example using MongoDB and motor
-
-Just define models using atom members, but subclass the NoSQLModel.
+Just define models using atom members, but subclass the `NoSQLModel`.
 
 ```python
 
