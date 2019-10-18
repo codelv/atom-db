@@ -3,10 +3,8 @@ import os
 import re
 import pytest
 import random
-import aiomysql
 import atomdb.sql
 import sqlalchemy as sa
-from aiomysql.sa import create_engine
 from atom.api import *
 from atomdb.sql import SQLModel, SQLModelManager, Relation
 from datetime import datetime, date, time
@@ -17,10 +15,10 @@ from pymysql.err import IntegrityError
 
 faker = Faker()
 
-if 'MYSQL_URL' not in os.environ:
-    os.environ['MYSQL_URL'] = 'mysql://mysql:mysql@127.0.0.1:3306/test_atomdb'
+if 'DATABASE_URL' not in os.environ:
+    os.environ['DATABASE_URL'] = 'mysql://mysql:mysql@127.0.0.1:3306/test_atomdb'
 
-DATABASE_URL = os.environ['MYSQL_URL']
+DATABASE_URL = os.environ['DATABASE_URL']
 
 
 class User(SQLModel):
@@ -123,16 +121,25 @@ async def reset_tables(*models):
 
 @pytest.fixture
 async def db(event_loop):
-    m = re.match(r'mysql://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
+    m = re.match(r'(.+)://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
     assert m, "MYSQL_URL is an invalid format"
-    user, pwd, host, port, db = m.groups()
+    schema, user, pwd, host, port, db = m.groups()
+
+    if schema == 'mysql':
+        from aiomysql.sa import create_engine
+        from aiomysql import connect
+    elif schema == 'postgres':
+        from aiopg.sa import create_engine
+        from aiopg import connect
+    else:
+        raise ValueError("Unsupported database schema: %s" % schema)
 
     params = dict(
         host=host, port=int(port), user=user, password=pwd, loop=event_loop,
         autocommit=True)
 
     # Create the DB
-    async with aiomysql.connect(**params) as conn:
+    async with connect(**params) as conn:
         async with conn.cursor() as c:
             # WARNING: Not safe
             await c.execute('DROP DATABASE IF EXISTS %s;' % db)

@@ -1,14 +1,21 @@
 dist: xenial
 language: python
 
-python:
-  - "3.6"
-  - "3.7"
-  - "3.8"
+jobs:
+  include:
+  - python: "3.6"
+    env: DATABASE_URL='mysql://travis:@127.0.0.1:3306/test_atomdb'
+  - python: "3.7"
+    env: DATABASE_URL='mysql://travis:@127.0.0.1:3306/test_atomdb'
+  - python: "3.8"
+    env: DATABASE_URL='mysql://travis:@127.0.0.1:3306/test_atomdb'
+  - python: "3.6"
+    env: DATABASE_URL='postgresql://travis:@127.0.0.1:5432/test_atomdb'
+  - python: "3.7"
+    env: DATABASE_URL='postgresql://travis:@127.0.0.1:5432/test_atomdb'
+  - python: "3.8"
+    env: DATABASE_URL='postgresql://travis:@127.0.0.1:5432/test_atomdb'
 
-env:
-  global:
-    - MYSQL_URL='mysql://travis:@127.0.0.1:3306/test_atomdb'
 
 services:
   - mongodb
