@@ -11,14 +11,17 @@ from datetime import datetime, date, time
 from faker import Faker
 from pprint import pprint
 
-from pymysql.err import IntegrityError
-
 faker = Faker()
 
 if 'DATABASE_URL' not in os.environ:
     os.environ['DATABASE_URL'] = 'mysql://mysql:mysql@127.0.0.1:3306/test_atomdb'
 
 DATABASE_URL = os.environ['DATABASE_URL']
+
+if DATABASE_URL.startswith('mysql'):
+    from pymysql.err import IntegrityError
+else:
+    from psycopg2.errors import UniqueViolation as IntegrityError
 
 
 class User(SQLModel):
@@ -123,7 +126,7 @@ async def reset_tables(*models):
 @pytest.fixture
 async def db(event_loop):
     m = re.match(r'(.+)://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
-    assert m, "MYSQL_URL is an invalid format"
+    assert m, "DATABASE_URL is an invalid format"
     schema, user, pwd, host, port, db = m.groups()
 
     if schema == 'mysql':
@@ -169,12 +172,7 @@ def test_query_ops_valid():
 
 @pytest.mark.asyncio
 async def test_drop_create_table(db):
-    try:
-        await User.objects.drop_table()
-    except Exception as e:
-        if 'Unknown table' not in str(e):
-            raise
-    await User.objects.create_table()
+    await reset_tables(User)
 
 
 @pytest.mark.asyncio

@@ -146,8 +146,7 @@ created it.
 #### Database setup
 
 Before accessing the DB you must assign a "database engine" to the manager's
-`database` member and the manager's `url` must be assigned to a
-`sqlalchemy.engine.url.URL` instance so it knows the database type.
+`database` member.
 
 ```python
 import os
@@ -171,14 +170,9 @@ mgr.database = engine
 
 
 ```
+
 This engine will then be used by the manager to execute queries.  You can
-retrive the database engine from any Model by using `Model.objects.engine`.
-
-
-The url is set automatically the the first `os.environ` variable found from the
-keys (`DATABASE_URL`,`POSTGRES_URL`, `MYSQL_URL`) in that order. If none
-of those are set it will raise an error. Instead you must manually assigned one
-via `manager.url = sa.engine.url.make_url('postgres://...')`
+retrieve the database engine from any Model by using `Model.objects.engine`.
 
 
 #### Django style queries

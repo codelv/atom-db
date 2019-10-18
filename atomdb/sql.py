@@ -382,9 +382,6 @@ class SQLModelManager(ModelManager):
     on a Model subclass it returns a table proxy binding.
 
     """
-    #: DB URL
-    url = Typed(sa.engine.url.URL)
-
     #: Metadata
     metadata = Instance(sa.MetaData)
 
@@ -408,15 +405,6 @@ class SQLModelManager(ModelManager):
             tables[cls] = table
         return tables
 
-    def _default_url(self):
-        env = os.environ
-        url = env.get('DATABASE_URL',
-                      env.get('POSTGRES_URL',
-                              env.get('MYSQL_URL')))
-        if url is None:
-            raise EnvironmentError("No database url was found")
-        return sa.engine.url.make_url(url)
-
     def __get__(self, obj, cls=None):
         """ Retrieve the table for the requested object or class.
 
@@ -436,14 +424,6 @@ class SQLModelManager(ModelManager):
     def _default_database(self):
         raise EnvironmentError("No database engine has been set. Use "
                                "SQLModelManager.instance().database = <db>")
-
-    def get_dialect(self, **kwargs):
-        dialect_cls = self.url.get_dialect()
-        dialect_args = {}
-        for k in sa.util.get_cls_kwargs(dialect_cls):
-            if k in kwargs:
-                dialect_args[k] = kwargs.pop(k)
-        return dialect_cls(**dialect_args)
 
 
 class ConnectionProxy(Atom):
@@ -815,8 +795,6 @@ class SQLTableProxy(Atom):
             # This is needed to support joins
             # select, count, delete, etc...
             q = getattr(q, __q__)()
-        elif joins:
-            raise NotImplementedError("Cannot join on custom queries")
         else:
             q = __q__
 
@@ -831,23 +809,19 @@ class SQLBinding(Atom):
     #: Model Manager
     manager = Instance(SQLModelManager)
 
-    #: Dialect
-    dialect = Instance(object)
-
     #: The queue
     queue = ContainerList()
-
-    #: Dialect name
-    name = Str()
 
     engine = property(lambda s: s)
     schema_for_object = schema._schema_getter(None)
 
-    def _default_name(self):
+    @property
+    def name(self):
         return self.dialect.name
 
-    def _default_dialect(self):
-        return self.manager.get_dialect()
+    @property
+    def dialect(self):
+        return self.manager.database.dialect
 
     def contextual_connect(self, **kwargs):
         return self
@@ -1109,13 +1083,15 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                         f'Did not update "{self}", either no rows with '
                         f'pk={self._id} exist or it has not changed.')
             else:
+                if not self._id:
+                    # Postgres errors if using None for the pk
+                    state.pop(self.__pk__, None)
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
-
-                # TODO: Is this correct?
-                # If force insert is used we may not want this?
-                if r.lastrowid:
-                    self._id = r.lastrowid
+                if hasattr(r, 'lastrowid'):
+                    self._id = r.lastrowid # MySQL
+                else:
+                    self._id = await r.scalar() # Postgres
 
                 # Save a ref to the object in the model cache
                 db.cache[self._id] = self
