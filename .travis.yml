@@ -20,7 +20,7 @@ jobs:
 services:
   - mongodb
   - mysql
-  - postgres
+  - postgresql
 
 install:
   # Setup
