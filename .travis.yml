@@ -4,6 +4,7 @@ language: python
 python:
   - "3.6"
   - "3.7"
+  - "3.8"
 
 env:
   global:
@@ -12,10 +13,11 @@ env:
 services:
   - mongodb
   - mysql
+  - postgres
 
 install:
   # Setup
-  - pip install atom motor sqlalchemy aiomysql
+  - pip install atom motor sqlalchemy aiomysql aiopg
 
   # Testing
   - pip install codecov pytest pytest-coverage pytest-asyncio faker
