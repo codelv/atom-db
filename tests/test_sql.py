@@ -25,8 +25,8 @@ DATABASE_URL = os.environ['MYSQL_URL']
 
 class User(SQLModel):
     id = Typed(int).tag(primary_key=True)
-    name = Unicode().tag(length=200)
-    email = Unicode().tag(length=64)
+    name = Str().tag(length=200)
+    email = Str().tag(length=64)
     active = Bool()
     age = Int()
     hashed_password = Bytes()
@@ -35,18 +35,18 @@ class User(SQLModel):
 
 
 class Job(SQLModel):
-    name = Unicode().tag(length=64, unique=True)
+    name = Str().tag(length=64, unique=True)
     roles = Relation(lambda: JobRole)
 
 
 class JobRole(SQLModel):
-    name = Unicode().tag(length=64)
+    name = Str().tag(length=64)
     job = Instance(Job)
 
 
 class Image(SQLModel):
-    name = Unicode().tag(length=100)
-    path = Unicode().tag(length=200)
+    name = Str().tag(length=100)
+    path = Str().tag(length=200)
     metadata = Typed(dict).tag(nullable=True)
     alpha = Range(low=0, high=255)
     data = Instance(bytes).tag(nullable=True)
@@ -58,7 +58,7 @@ class Image(SQLModel):
 class Page(SQLModel):
     title = Str().tag(length=60)
     status = Enum('preview', 'live')
-    body = Unicode().tag(type=sa.UnicodeText())
+    body = Str().tag(type=sa.UnicodeText())
     author = Instance(User)
     images = List(Instance(Image))
     related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
@@ -86,7 +86,7 @@ class Comment(SQLModel):
     page = Instance(Page)
     author = Instance(User)
     status = Enum('pending', 'approved')
-    body = Unicode().tag(type=sa.UnicodeText())
+    body = Str().tag(type=sa.UnicodeText())
     reply_to = ForwardInstance(lambda: Comment).tag(nullable=True)
     when = Instance(time)
 
@@ -142,6 +142,14 @@ async def db(event_loop):
         mgr = SQLModelManager.instance()
         mgr.database = engine
         yield engine
+
+
+def test_query_ops_valid():
+    """ Test that operators are all valid """
+    from sqlalchemy.sql.expression import ColumnElement
+    from atomdb.sql import QUERY_OPS
+    for k, v in QUERY_OPS.items():
+        assert hasattr(ColumnElement, v)
 
 
 @pytest.mark.asyncio
@@ -213,6 +221,32 @@ async def test_query(db):
     # Delete them all
     await User.objects.delete(active=True)
     assert len(await User.objects.all()) == 0
+
+
+@pytest.mark.asyncio
+async def test_query_related(db):
+    await reset_tables(User, Job, JobRole)
+
+    job = await Job.objects.create(name=faker.job())
+    job1 = await Job.objects.create(name=faker.job())
+    job2 = await Job.objects.create(name=faker.job())
+
+    role = await JobRole.objects.create(job=job, name=faker.job())
+    role1 = await JobRole.objects.create(job=job1, name=faker.job())
+    role2 = await JobRole.objects.create(job=job2, name=faker.job())
+
+    roles = await JobRole.objects.filter(job__name__in=[job.name, job2.name])
+    assert len(roles) == 2
+
+    roles = await JobRole.objects.filter(job__name=job2.name)
+    assert len(roles) == 1
+
+    roles = await JobRole.objects.filter(job__name__not='none of the above')
+    assert len(roles) == 3
+
+    # Cant do multiple joins
+    with pytest.raises(NotImplementedError):
+        roles = await JobRole.objects.get(job__name__other=1)
 
 
 @pytest.mark.asyncio
@@ -350,8 +384,12 @@ async def test_filters(db):
     assert len(users) == 1 and users[0].age == user.age
 
     # Not supported
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         users = await User.objects.filter(age__xor=1)
+
+    # Missing op
+    with pytest.raises(ValueError):
+        users = await User.objects.filter(age__=1)
 
 
 @pytest.mark.asyncio

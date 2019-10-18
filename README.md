@@ -7,8 +7,6 @@ seamlessly saving and restoring atom objects from json based document databases
 and SQL databases supported by sqlalchemy.
 
 
-### Why?
-
 The main reason for building this is to make it easier have database integration
 with [enaml](https://github.com/nucleic/enaml) applications.  Without this,
 a separate framework is needed to define database models, which is a
@@ -18,92 +16,47 @@ This was originally a part of [enaml-web](https://github.com/codelv/enaml-web)
 but has been pulled out to a separate package.
 
 
+### Overview
+
+It an async ORM built on [atom](https://github.com/nucleic/atom) which provides
+change notification and type enforcment and lower memory footprint.
+
+
+With SQL Support
+
+- Supports MySQL and Postgres
+- Uses django like queries or raw sqlalchemy queries
+- Works with alembic database migrations
+
+
+And NoSQL Support
+
+- Supports MongoDB using motor
+
+
+It's still in development....
+
+
 ### Structure
 
-The design is based somewhat on django. Using `Model.objects` retrieves a
-manager for that type of object which can be used to create queries. No
-restriction is imposed on what type of manager is used, leaving that to
-whichever database library is preferred (ex motor, txmongo, sqlalchemy,...).
+The design is based somewhat on django.
 
-In addition to `Model.objects` a serializer is added to each class as
-`Model.serializer` which is used to serialize and deserialize the objects
-to and from the database.
+There is a "manager" `Model.objects` do queries on the database table
+created for each subclass.
 
+Serialization and deserialization is done with `Model.serializer`
 
-### Example using MongoDB and motor
-
-Just define models using atom members, but subclass the NoSQLModel.
-
-```python
-
-from atom.api import Unicode, Int, Instance, List
-from atomdb.nosql import NoSQLModel, NoSQLModelManager
-from motor.motor_asyncio import AsyncIOMotorClient
-
-# Set DB
-client = AsyncIOMotorClient()
-mgr = NoSQLModelManager.instance()
-mgr.database = client.test_db
+Each `Model` has async `save`, `delete`, and `restore` methods to interact with
+the database. The pickle protocol methods `__getstate__` and `__setstate__` are
+re-implemented (setstate is async).
 
 
-class Group(NoSQLModel):
-    name = Unicode()
+# MySQL and Postgres support
 
-class User(NoSQLModel):
-    name = Unicode()
-    age = Int()
-    groups = List(Group)
+You can use atom-db to save and restore atom subclasses to MySQL and Postgres.
 
 
-```
-
-Then we can create an instance and save it. It will perform an upsert or replace
-the existing entry.
-
-```python
-
-admins = Group(name="Admins")
-await admins.save()
-
-# It will save admins using it's ObjectID
-bob = User(name="Bob", age=32, groups=[admins])
-await bob.save()
-
-tom = User(name="Tom", age=34, groups=[admins])
-await tom.save()
-
-```
-
-To fetch from the DB each model has a `ModelManager` called `objects` that will
-simply return the collection for the model type. For example.
-
-```python
-
-# Fetch from db, you can use any MongoDB queries here
-state = await User.objects.find_one({'name': "James"})
-if state:
-    james = await User.restore(state)
-
-# etc...
-```
-
-Restoring is async because it will automatically fetch any related objects
-(ex the groups in this case). It saves objects using the ObjectID when present.
-
-And finally you can either delete using queries on the manager directly or
-call on the object.
-
-```python
-await tom.delete()
-assert not await User.objects.find_one({'name': "Tom"})
-
-```
-
-You can exclude members from being saved to the DB by tagging them
-with `.tag(store=False)`.
-
-
-### SQL with aiomysql / aiopg
+### Example SQL with aiomysql / aiopg
 
 Just define models using atom members, but subclass the SQLModel.
 
@@ -274,7 +227,93 @@ target_metadata = manager.metadata
 The rest is handled by alembic.
 
 
-### Contributing
+# NoSQL support
 
-This is early in development and may have issues. Pull requests,
-feature requests, are welcome!
+You can use atom-db to save and restore atom subclasses to MongoDB.
+
+The NoSQL version is very basic as mongo is much more relaxed. No restriction
+is imposed on what type of manager is used, leaving that to whichever database
+library is preferred but it's tested (and currently used) with [motor](https://motor.readthedocs.io/en/stable/)
+and [tornado](https://www.tornadoweb.org/en/stable/index.html).
+
+
+### Example using MongoDB and motor
+
+Just define models using atom members, but subclass the NoSQLModel.
+
+```python
+
+from atom.api import Unicode, Int, Instance, List
+from atomdb.nosql import NoSQLModel, NoSQLModelManager
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# Set DB
+client = AsyncIOMotorClient()
+mgr = NoSQLModelManager.instance()
+mgr.database = client.test_db
+
+
+class Group(NoSQLModel):
+    name = Unicode()
+
+class User(NoSQLModel):
+    name = Unicode()
+    age = Int()
+    groups = List(Group)
+
+
+```
+
+Then we can create an instance and save it. It will perform an upsert or replace
+the existing entry.
+
+```python
+
+admins = Group(name="Admins")
+await admins.save()
+
+# It will save admins using it's ObjectID
+bob = User(name="Bob", age=32, groups=[admins])
+await bob.save()
+
+tom = User(name="Tom", age=34, groups=[admins])
+await tom.save()
+
+```
+
+To fetch from the DB each model has a `ModelManager` called `objects` that will
+simply return the collection for the model type. For example.
+
+```python
+
+# Fetch from db, you can use any MongoDB queries here
+state = await User.objects.find_one({'name': "James"})
+if state:
+    james = await User.restore(state)
+
+# etc...
+```
+
+Restoring is async because it will automatically fetch any related objects
+(ex the groups in this case). It saves objects using the ObjectID when present.
+
+And finally you can either delete using queries on the manager directly or
+call on the object.
+
+```python
+await tom.delete()
+assert not await User.objects.find_one({'name': "Tom"})
+
+```
+
+You can exclude members from being saved to the DB by tagging them
+with `.tag(store=False)`.
+
+
+
+## Contributing
+
+This is currently used in a few projects but not considered mature by
+any means.
+
+Pull requests and feature requests are welcome!

@@ -41,8 +41,43 @@ COLUMN_KWARGS = (
 )
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
 
+# ops that can be used with django-style queries
+QUERY_OPS = {
+    'eq': '__eq__',
+    'gt': '__gt__',
+    'gte': '__ge__',
+    'ge': '__ge__',
+    'lt': '__lt__',
+    'le': '__le__',
+    'lte': '__le__',
+    'all': 'all_',
+    'any': 'any_',
+    #'and': 'and_',
+    #'or': 'or_',
+    'ne': '__ne__',
+    'not': '__ne__',
+    'contains': 'contains',
+    'endswith': 'endswith',
+    'ilike': 'ilike',
+    'in': 'in_',
+    'is': 'is_',
+    'is_distinct_from': 'is_distinct_from',
+    'isnot': 'isnot',
+    'isnot_distinct_from': 'isnot_distinct_from',
+    'like': 'like',
+    'match': 'match',
+    'notilike': 'notilike',
+    'notlike': 'notlike',
+    'notin': 'notin_',
+    'startswith': 'startswith',
+}
+
 # Fields supported on the django style Meta class of a model
 VALID_META_FIELDS = ('db_table', 'unique_together', 'abstract')
+
+MULTI_JOIN_ERROR = "Multi-join lookups are not supported, build queries " \
+                   "manually using Model.objects.table.select()..."
+
 
 log = logging.getLogger('atomdb.sql')
 
@@ -553,7 +588,7 @@ class SQLTableProxy(Atom):
 
         """
         restore = self.model.restore
-        q = self.query(self.table.select(), **filters)
+        q = self.query(None, **filters)
         connection = filters.get(self.connection_kwarg)
         return [await restore(row)
                 for row in await self.fetchall(q, connection=connection)]
@@ -572,7 +607,7 @@ class SQLTableProxy(Atom):
             The execute response
 
         """
-        q = self.query(self.table.delete(), **filters)
+        q = self.query('delete', **filters)
         connection = filters.get(self.connection_kwarg)
         async with self.connection(connection) as conn:
             return await conn.execute(q)
@@ -594,7 +629,7 @@ class SQLTableProxy(Atom):
             The model matching the query or None.
 
         """
-        q = self.query(self.table.select(), **filters)
+        q = self.query(None, **filters)
         connection = filters.get(self.connection_kwarg)
         row = await self.fetchone(q, connection=connection)
         if row is not None:
@@ -650,7 +685,7 @@ class SQLTableProxy(Atom):
         """ Return a count of objects in the table matching the given filters
 
         """
-        q = self.query(self.table.count(), **filters)
+        q = self.query('count', **filters)
         connection = filters.get(self.connection_kwarg)
         return await self.scalar(q, connection=connection)
 
@@ -660,7 +695,7 @@ class SQLTableProxy(Atom):
 
         Parameters
         ----------
-        __q__: Query
+        __q__: Query or String
             The query to add a where clause to. Will default to select if not
             given.
         filters: Dict
@@ -678,49 +713,97 @@ class SQLTableProxy(Atom):
             ?highlight=column#sqlalchemy.sql.operators.ColumnOperators
 
         """
-        q = self.table.select() if __q__ is None else __q__
-        if not filters:
-            return q
-        columns = self.table.c
         connection_kwarg = self.connection_kwarg
+        ops = []
+        joins = {}
+
+        # Build the filter operations
         for k, v in filters.items():
             if k == connection_kwarg:
                 continue # Skip the connection parameter if given
-            op = 'eq'
+
+            columns = self.table.c
+            cls = self.model
+
+            # Support lookups by model
             if isinstance(v, Model):
                 v = v.serializer.flatten_object(v, scope=None)
+
+            # Support related lookups or operations like __in
             if '__' in k:
-                #: TODO: Support related lookups
                 args = k.split('__')
-                if len(args) > 2:
-                    raise NotImplementedError(
-                        "Related lookups are not supported, build queries "
-                        "manually using Model.objects.table.select()...")
-                field, op = args
+                n = len(args)
+                if n == 1:
+                    raise ValueError("Invalid filter %s on %s" % (k, cls))
+                if n > 3:
+                    raise NotImplementedError(MULTI_JOIN_ERROR)
+
+                field = args[0]
+                op = QUERY_OPS.get(args[-1], None)
+
+                # This is a lookup on a related filed or a operation on a
+                # related field so figure out which case
+                if op is None or n == 3:
+                    if n == 2:
+                        op = '__eq__'
+                    elif op is None:
+                        raise NotImplementedError(MULTI_JOIN_ERROR)
+
+                    member = getattr(cls, field, None)
+                    if not isinstance(member, FK_TYPES):
+                        raise ValueError("Invalid filter %s on %s" % (k, cls))
+
+                    # Set the Model to the related field model
+                    cls = resolve_member_type(member)
+                    table = cls.objects.table
+
+                    # Specify the join
+                    on = columns[self.model.__pk__] == table.c[cls.__pk__]
+                    joins[table] = on
+                    columns = table.c
+
+                    # Since this is a joined lookup change the field
+                    field = args[1]
+
             else:
+                # Simple case
+                op = '__eq__'
                 field = k
 
+            # Get the column from the sqlalchemy table
             try:
                 col = columns[field]
             except KeyError:
                 # If the field has a different name assigned use that
-                member = getattr(self.model, field)
-                field = member.metadata['name']
-                col = columns[field]
+                member = getattr(cls, field, None)
+                if member is None:
+                    raise ValueError(
+                        "Invalid filter %s on %s" % (k, self.model))
+                name = member.metadata['name']
+                col = columns[name]
 
-            if hasattr(col, op):
-                # Like, contains, endswith, etc...
-                q = q.where(getattr(col, op)(v))
-            elif hasattr(col, op + '_'):
-                # in,  is, not, etc...
-                q = q.where(getattr(col, op + '_')(v))
-            elif hasattr(col, '__%s__' % op):
-                # eq, lt, gt, etc...
-                q = q.where(getattr(col, '__%s__' % op)(v))
-            else:
-                raise NotImplementedError(
-                    "%s operator is unknown or not supported. Build them "
-                    "manually using Model.objects.table.select()..." % op)
+            ops.append((col, op, v))
+
+        # Build the base query, joining as needed
+        q = self.table
+        for table, on in joins.items():
+            q = q.join(table, on)
+
+        if __q__ is None:
+            q = q.select(use_labels=bool(joins))
+        elif isinstance(__q__, str):
+            # This is needed to support joins
+            # select, count, delete, etc...
+            q = getattr(q, __q__)()
+        elif joins:
+            raise NotImplementedError("Cannot join on custom queries")
+        else:
+            q = __q__
+
+        # Filter the query
+        for (col, op, v) in ops:
+            q = q.where(getattr(col, op)(v))
+
         return q
 
 
@@ -982,7 +1065,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             raise ValueError(
                 'Cannot use force_insert and force_update together')
 
-        mgr = self.objects
+        db = self.objects
         state = self.__getstate__()
         state.pop('__model__', None)
         state.pop('__ref__', None)
@@ -995,12 +1078,8 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             elif m.metadata and 'name' in m.metadata and name in state:
                 state[m.metadata['name']] = state.pop(name)
 
-        table = mgr.table
-        try:
-            if connection is None:
-                conn = await mgr.engine._acquire()
-            else:
-                conn = connection
+        table = db.table
+        async with db.connection(connection) as conn:
             if force_update or (self._id and not force_insert):
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
@@ -1019,31 +1098,21 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                     self._id = r.lastrowid
 
                 # Save a ref to the object in the model cache
-                mgr.cache[self._id] = self
+                db.cache[self._id] = self
             return r
-        finally:
-            if connection is None:
-                await mgr.engine.release(conn)
 
     async def delete(self, connection=None):
         """ Alias to delete this object in the database """
         pk = self._id
         if not pk:
             return
-        mgr = self.objects
-        table = mgr.table
+        db = self.objects
+        table = db.table
         q = table.delete().where(table.c[self.__pk__] == pk)
-        try:
-            if connection is None:
-                conn = await mgr.engine._acquire()
-            else:
-                conn = connection
+        async with db.connection(connection) as conn:
             r = await conn.execute(q)
             if r.rowcount:
-                del mgr.cache[pk]
+                del db.cache[pk]
                 del self._id
             return r
-        finally:
-            if connection is None:
-                await mgr.engine.release(conn)
 
