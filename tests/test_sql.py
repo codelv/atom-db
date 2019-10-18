@@ -114,8 +114,9 @@ async def reset_tables(*models):
         try:
             await Model.objects.drop_table()
         except Exception as e:
-            if 'Unknown table' not in str(e):
-                raise
+            msg = str(e)
+            if 'Unknown table' not in msg or 'does not exist' not in msg:
+                raise # Unexpected error
         await Model.objects.create_table()
 
 
