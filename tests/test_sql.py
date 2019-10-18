@@ -128,7 +128,7 @@ async def db(event_loop):
     if schema == 'mysql':
         from aiomysql.sa import create_engine
         from aiomysql import connect
-    elif schema == 'postgresql':
+    elif schema == 'postgres':
         from aiopg.sa import create_engine
         from aiopg import connect
     else:
