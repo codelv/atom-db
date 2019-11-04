@@ -250,9 +250,11 @@ async def test_query_related(db):
 
     roles = await JobRole.objects.filter(job__name__in=[job.name, job2.name])
     assert len(roles) == 2
+    assert await JobRole.objects.count(job__name__in=[job.name, job2.name]) == 2
 
     roles = await JobRole.objects.filter(job__name=job2.name)
     assert len(roles) == 1
+    assert await JobRole.objects.count(job__name=job2.name) == 1
 
     roles = await JobRole.objects.filter(job__name__not='none of the above')
     assert len(roles) == 3

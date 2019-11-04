@@ -191,7 +191,7 @@ class ModelSerializer(Atom):
 
         # If not restoring from cache update the state
         if created:
-            await obj.__setstate__(state, scope)
+            await obj.__restorestate__(state, scope)
         return obj
 
     async def get_or_create(self, cls, state, scope):
@@ -327,7 +327,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
             state['_id'] = self._id
         return state
 
-    async def __setstate__(self, state, scope=None):
+    async def __restorestate__(self, state, scope=None):
         """ Restore an object from the a state from the database. This is
         async as it will lookup any referenced objects from the DB.
 
@@ -379,7 +379,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
             except Exception as e:
                 exc = traceback.format_exc()
                 logger.error(
-                    f"Error setting state:"
+                    f"Error loading state:"
                     f"{self.__model__}.{k} = {pformat(obj)}:"
                     f"\nSelf: {ref}: {scope.get(ref)}"
                     f"\nValue: {pformat(v)}"
@@ -398,7 +398,7 @@ class Model(with_metaclass(ModelMeta, Atom)):
     async def restore(cls, state):
         """ Restore an object from the database """
         obj = cls.__new__(cls)
-        await obj.__setstate__(state)
+        await obj.__restorestate__(state)
         return obj
 
     async def save(self):

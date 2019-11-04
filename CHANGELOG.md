@@ -1,4 +1,8 @@
 
+# 0.3.3
+
+- Change __setstate__ to __restorestate__ to not conflict with normal pickleing
+
 # 0.3.2
 
 - Support lookups on foreign key fields

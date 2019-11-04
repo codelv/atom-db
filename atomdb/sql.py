@@ -963,13 +963,13 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             cache[pk] = obj
 
             # This ideally should only be done if created
-            await obj.__setstate__(state)
+            await obj.__restorestate__(state)
         elif force:
-            await obj.__setstate__(state)
+            await obj.__restorestate__(state)
 
         return obj
 
-    async def __setstate__(self, state, scope=None):
+    async def __restorestate__(self, state, scope=None):
         # Holds cleaned state extracted for this model which may come from
         # a DB row using labels or renamed columns
         cleaned_state = {}
@@ -1050,7 +1050,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                             continue
 
                 cleaned_state[name] = v
-        await super().__setstate__(cleaned_state, scope)
+        await super().__restorestate__(cleaned_state, scope)
 
     async def save(self, force_insert=False, force_update=False,
                    connection=None):
@@ -1090,7 +1090,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 r = await conn.execute(q)
                 if hasattr(r, 'lastrowid'):
                     self._id = r.lastrowid # MySQL
-                else:
+                elif not self._id:
                     self._id = await r.scalar() # Postgres
 
                 # Save a ref to the object in the model cache

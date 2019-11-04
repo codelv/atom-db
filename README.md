@@ -35,8 +35,8 @@ created for each subclass.
 Serialization and deserialization is done with `Model.serializer`
 
 Each `Model` has async `save`, `delete`, and `restore` methods to interact with
-the database. The pickle protocol methods `__getstate__` and `__setstate__` are
-re-implemented (setstate is async).
+the database. This can be customized if needed using
+`__restorestate__` and `__getstate__`.
 
 
 # MySQL and Postgres support
@@ -254,7 +254,7 @@ When using a transaction you need to pass the active connection to
 each call or it will use a different connection outside of the transaction!
 
 The connection argument is removed from the filters/state. If your model happens
-to have a member named `connection` you can rename the connection argument by 
+to have a member named `connection` you can rename the connection argument by
 with `Model.object.connection_kwarg = 'connection_'` or whatever name you like.
 
 ### Migrations

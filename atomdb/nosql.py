@@ -139,9 +139,9 @@ class NoSQLModel(Model):
             cache[pk] = obj
 
             # This ideally should only be done if created
-            await obj.__setstate__(state)
+            await obj.__restorestate__(state)
         elif force:
-            await obj.__setstate__(state)
+            await obj.__restorestate__(state)
 
         return obj
 
