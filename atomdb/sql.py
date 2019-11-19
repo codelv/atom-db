@@ -1088,10 +1088,13 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                     state.pop(self.__pk__, None)
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
-                if hasattr(r, 'lastrowid'):
-                    self._id = r.lastrowid # MySQL
-                elif not self._id:
-                    self._id = await r.scalar() # Postgres
+
+                # Don't overwrite if force inserting
+                if not self._id:
+                    if hasattr(r, 'lastrowid'):
+                        self._id = r.lastrowid # MySQL
+                    else:
+                        self._id = await r.scalar() # Postgres
 
                 # Save a ref to the object in the model cache
                 db.cache[self._id] = self

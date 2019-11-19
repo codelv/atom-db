@@ -1,4 +1,8 @@
 
+# 0.3.4
+
+- Fix bug when saving using a generated id
+
 # 0.3.3
 
 - Change __setstate__ to __restorestate__ to not conflict with normal pickleing
