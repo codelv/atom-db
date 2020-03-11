@@ -29,7 +29,7 @@ from sqlalchemy import func
 
 from .base import (
     ModelManager, ModelSerializer, Model, ModelMeta, find_subclasses,
-    JSONSerializer
+    JSONModel, JSONSerializer
 )
 
 
@@ -123,7 +123,9 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     """ Convert the python type to an alchemy table column type
 
     """
-    if issubclass(cls, Model):
+    if issubclass(cls, JSONModel):
+        return sa.JSON(**kwargs)
+    elif issubclass(cls, Model):
         name = f'{cls.__model__}.{cls.__pk__}'
         cls.__backrefs__.add((model, member))
 
@@ -229,6 +231,8 @@ def atom_member_to_sql_column(model, member, **kwargs):
         value_type = resolve_member_type(item_type)
         if value_type is None:
             raise TypeError("List and Tuple members must specify types")
+        if issubclass(value_type, JSONModel):
+            return sa.JSON(**kwargs)
         return sa.ARRAY(py_type_to_sql_column(
             model, member, value_type, **kwargs))
     elif isinstance(member, api.Bytes):
@@ -428,7 +432,7 @@ class SQLModelManager(ModelManager):
 
 class ConnectionProxy(Atom):
     """ An wapper for a connection to be used with async with syntax that
-    does nothing but passes the exisiting connection when entered.
+    does nothing but passes the existing connection when entered.
 
     """
     connection = Value()
@@ -741,7 +745,7 @@ class SQLTableProxy(Atom):
                 field = args[0]
                 op = QUERY_OPS.get(args[-1], None)
 
-                # This is a lookup on a related filed or a operation on a
+                # This is a lookup on a related field or a operation on a
                 # related field so figure out which case
                 if op is None or n == 3:
                     if n == 2:

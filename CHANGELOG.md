@@ -1,3 +1,6 @@
+# 0.3.5
+
+- Set column type to json if the type is a JSONModel subclass
 
 # 0.3.4
 
