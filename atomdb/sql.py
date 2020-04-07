@@ -1,5 +1,5 @@
 """
-Copyright (c) 2018-2019, Jairus Martin.
+Copyright (c) 2018-2020, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -15,7 +15,7 @@ import datetime
 import weakref
 import sqlalchemy as sa
 from atom import api
-from atom.atom import AtomMeta, with_metaclass
+from atom.atom import AtomMeta
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
     ForwardInstance, Value, Bool
@@ -153,7 +153,7 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     raise NotImplementedError(
         f"A type for {member.name} of {model} ({cls}) could not be "
         f"determined automatically, please specify it manually by tagging it "
-        f"with .tag(column=<sqlalchemy column>)")
+        f"with .tag(column=<sqlalchemy column>) or set `store=False`")
 
 
 def resolve_member_type(member):
@@ -370,7 +370,8 @@ class SQLModelSerializer(ModelSerializer):
         ModelType = obj.__class__
         if '__model__' in state:
             return state  # Joined already
-        return await ModelType.objects.get(_id=state['_id'])
+        q = ModelType.objects.query(None, _id=state['_id'])
+        return await ModelType.objects.fetchone(q)
 
     def _default_registry(self):
         """ Add all sql and json models to the registry
@@ -935,7 +936,7 @@ class SQLMeta(ModelMeta):
         return cls
 
 
-class SQLModel(with_metaclass(SQLMeta, Model)):
+class SQLModel(Model, metaclass=SQLMeta):
     """ A model that can be saved and restored to and from a database supported
     by sqlalchemy.
 
@@ -1002,22 +1003,25 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                 field_label = f'{table_name}_{field_name}'
 
                 if isinstance(m, FK_TYPES):
-                    rel = resolve_member_type(m)
-                    if issubclass(rel, SQLModel):
+                    RelModel = resolve_member_type(m)
+                    if issubclass(RelModel, SQLModel):
                         # If the related model was joined, the pk field should
                         # exist so automatically restore that as well
-                        rel_pk_field = f'{rel.__model__}_{rel.__pk__}'
+                        rel_pk_field = f'{RelModel.__model__}_{RelModel.__pk__}'
                         try:
                             rel_id = state[field_label]
                         except KeyError:
                             rel_id = state.get(rel_pk_field)
                         if rel_id:
                             # Lookup in cache first to avoid recursion errors
-                            obj = rel.objects.cache.get(rel_id)
+                            obj = RelModel.objects.cache.get(rel_id)
                             if obj is None:
-                                if rel_pk_field not in state:
-                                    continue
-                                obj = await rel.restore(state)
+                                if rel_pk_field in state:
+                                    obj = await RelModel.restore(state)
+                                else:
+                                    # Create an unloaded model
+                                    obj = RelModel.__new__(RelModel)
+                                    obj._id = rel_id
                             cleaned_state[name] = obj
                             continue
 
@@ -1052,16 +1056,30 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
                     continue
 
                 # Attempt to lookup related fields from the cache
-                if isinstance(m, FK_TYPES):
-                    rel = resolve_member_type(m)
-                    if issubclass(rel, SQLModel):
-                        v = rel.objects.cache.get(v)
-                        if v is None:
-                            # Skip because this will throw a TypeError
-                            continue
+                if v is not None and isinstance(m, FK_TYPES):
+                    RelModel = resolve_member_type(m)
+                    if issubclass(RelModel, SQLModel):
+                        obj = RelModel.objects.cache.get(v)
+                        if obj is None:
+                            # Create an unloaded model
+                            obj = RelModel.__new__(RelModel)
+                            obj._id = v
+                        v = obj
+
 
                 cleaned_state[name] = v
         await super().__restorestate__(cleaned_state, scope)
+
+    async def load(self, connection=None):
+        """ Alias to load this object from the database """
+        if self.__restored__:
+            return # Already loaded
+        db = self.objects
+        if self._id is not None:
+            q = db.query(None, _id=self._id)
+            state = await db.fetchone(q, connection=connection)
+            if state is not None:
+                await self.__restorestate__(state)
 
     async def save(self, force_insert=False, force_update=False,
                    connection=None):
@@ -1121,8 +1139,11 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
         q = table.delete().where(table.c[self.__pk__] == pk)
         async with db.connection(connection) as conn:
             r = await conn.execute(q)
-            if r.rowcount:
-                del db.cache[pk]
-                del self._id
+            if not r.rowcount:
+                log.warning(
+                    f'Did not delete "{self}", no rows with '
+                    f'pk={self._id} exist.')
+            del db.cache[pk]
+            del self._id
             return r
 

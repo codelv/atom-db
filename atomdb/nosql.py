@@ -1,5 +1,5 @@
 """
-Copyright (c) 2018, Jairus Martin.
+Copyright (c) 2018-2020, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -144,6 +144,16 @@ class NoSQLModel(Model):
             await obj.__restorestate__(state)
 
         return obj
+
+    async def load(self):
+        """ Alias to load this object from the database """
+        if self.__restored__:
+            return # Already loaded
+        db = self.objects
+        if self._id is not None:
+            state = await db.find_one({'_id': self._id})
+            if state is not None:
+                await self.__restorestate__(state)
 
     async def save(self):
         """ Alias to delete this object to the database """

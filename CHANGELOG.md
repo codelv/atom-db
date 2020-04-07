@@ -1,3 +1,10 @@
+# 0.3.7
+
+- Add a `__restored__` member to models and a `load` method so foreign keys
+do not restore as None if not in the cache.
+- Update to support atom 0.5.0
+
+
 # 0.3.6
 
 - Add `cache` option to SQLModelManager to determine if restoring

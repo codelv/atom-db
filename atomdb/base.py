@@ -1,5 +1,5 @@
 """
-Copyright (c) 2018-2019, Jairus Martin.
+Copyright (c) 2018-2020, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -13,10 +13,10 @@ import os
 import logging
 import traceback
 from atom.api import (
-    Atom, Property, Instance, Dict, Unicode, Coerced, Value, Typed, Bytes
+    Atom, Property, Instance, Dict, Str, Coerced, Value, Typed, Bytes, Bool
 )
-from atom.atom import AtomMeta, with_metaclass
-from atom.dict import _DictProxy
+from atom.atom import AtomMeta
+from collections.abc import MutableMapping
 from random import getrandbits
 from pprint import pformat
 from base64 import b64encode, b64decode
@@ -84,9 +84,8 @@ class ModelSerializer(Atom):
             return v.serializer.flatten_object(v, scope)
         elif isinstance(v, (list, tuple, set)):
             return [flatten(item, scope) for item in v]
-        elif isinstance(v, (dict, _DictProxy)):
-            return {k: flatten(item, scope)
-                    for k, item in v.items()}
+        elif isinstance(v, (dict, MutableMapping)):
+            return {k: flatten(item, scope) for k, item in v.items()}
         # TODO: Handle other object types
         return v
 
@@ -288,7 +287,7 @@ class ModelMeta(AtomMeta):
         return cls
 
 
-class Model(with_metaclass(ModelMeta, Atom)):
+class Model(Atom, metaclass=ModelMeta):
     """ An atom model that can be serialized and deserialized to and from
     a database.
 
@@ -300,6 +299,9 @@ class Model(with_metaclass(ModelMeta, Atom)):
 
     #: A unique ID used to handle cyclical serialization and deserialization
     __ref__ = Bytes(factory=lambda: b'%0x' % getrandbits(30 * 4))
+
+    #: Flag to indicate if this model has been restored
+    __restored__ = Bool().tag(store=False)
 
     #: State set when restored from the database. This should be updated
     #: upon successful save and never modified
@@ -387,6 +389,9 @@ class Model(with_metaclass(ModelMeta, Atom)):
                     f"\nState: {pformat(state)}"
                     f"\n{exc}")
 
+        # Update restored state
+        self.__restored__ = True
+
     # ==========================================================================
     # Database API
     # ==========================================================================
@@ -396,10 +401,14 @@ class Model(with_metaclass(ModelMeta, Atom)):
 
     @classmethod
     async def restore(cls, state):
-        """ Restore an object from the database """
+        """ Restore an object from the database state """
         obj = cls.__new__(cls)
         await obj.__restorestate__(state)
         return obj
+
+    async def load(self):
+        """ Alias to load this object from the database """
+        raise NotImplementedError
 
     async def save(self):
         """ Alias to delete this object to the database """
@@ -474,5 +483,5 @@ class JSONModel(Model):
     serializer = JSONSerializer.instance()
 
     #: JSON cannot encode bytes
-    _id = Unicode()
-    __ref__ = Unicode(factory=lambda: (b'%0x' % getrandbits(30 * 4)).decode())
+    _id = Str()
+    __ref__ = Str(factory=lambda: (b'%0x' % getrandbits(30 * 4)).decode())
