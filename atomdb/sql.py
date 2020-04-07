@@ -18,7 +18,7 @@ from atom import api
 from atom.atom import AtomMeta, with_metaclass
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance, Value
+    ForwardInstance, Value, Bool
 )
 from functools import wraps
 from sqlalchemy.engine import ddl, strategies
@@ -391,6 +391,9 @@ class SQLModelManager(ModelManager):
 
     #: Table proxy cache
     proxies = Dict()
+
+    #: Cache results
+    cache = Bool(True)
 
     def _default_metadata(self):
         return sa.MetaData(SQLBinding(manager=self))
@@ -948,7 +951,7 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
     objects = SQLModelManager.instance()
 
     @classmethod
-    async def restore(cls, state, force=False):
+    async def restore(cls, state, force=None):
         """ Restore an object from the database using the primary key. Save
         a ref in the table's object cache.  If force is True, update
         the cache if it exists.
@@ -957,6 +960,10 @@ class SQLModel(with_metaclass(SQLMeta, Model)):
             pk = state[f'{cls.__model__}_{cls.__pk__}']
         except KeyError:
             pk = state[cls.__pk__]
+
+        # Check the default for force reloading
+        if force is None:
+            force = not cls.objects.table.bind.manager.cache
 
         # Check if this is in the cache
         cache = cls.objects.cache

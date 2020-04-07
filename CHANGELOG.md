@@ -1,3 +1,8 @@
+# 0.3.6
+
+- Add `cache` option to SQLModelManager to determine if restoring
+should always be done even if the object is in the cache.
+
 # 0.3.5
 
 - Set column type to json if the type is a JSONModel subclass
