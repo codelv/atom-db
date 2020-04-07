@@ -462,6 +462,7 @@ async def test_query_many_to_one(db):
 
         # Job should be restored from the cache
         assert role.job is not None
+        assert role.job.__restored__ == True
         #for role in job.roles:
         #    assert role.job == job
         loaded.append(job)
@@ -472,6 +473,7 @@ async def test_query_many_to_one(db):
     roles = await JobRole.objects.all()
     for role in roles:
         assert role.job is not None
+        assert role.job.__restored__ == True
 
     # Clear cache and ensure it doesn't pull from cache now
     Job.objects.cache.clear()
@@ -479,7 +481,10 @@ async def test_query_many_to_one(db):
 
     roles = await JobRole.objects.all()
     for role in roles:
-        assert role.job is None
+        assert role.job is not None
+        assert role.job.__restored__ == False
+        await role.job.load()
+        assert role.job.__restored__ == True
 
 
 @pytest.mark.asyncio
