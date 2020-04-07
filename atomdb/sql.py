@@ -1014,13 +1014,15 @@ class SQLModel(Model, metaclass=SQLMeta):
                             rel_id = state.get(rel_pk_field)
                         if rel_id:
                             # Lookup in cache first to avoid recursion errors
-                            obj = RelModel.objects.cache.get(rel_id)
+                            cache = RelModel.objects.cache
+                            obj = cache.get(rel_id)
                             if obj is None:
                                 if rel_pk_field in state:
                                     obj = await RelModel.restore(state)
                                 else:
                                     # Create an unloaded model
                                     obj = RelModel.__new__(RelModel)
+                                    cache[rel_id] = obj
                                     obj._id = rel_id
                             cleaned_state[name] = obj
                             continue
@@ -1059,13 +1061,14 @@ class SQLModel(Model, metaclass=SQLMeta):
                 if v is not None and isinstance(m, FK_TYPES):
                     RelModel = resolve_member_type(m)
                     if issubclass(RelModel, SQLModel):
-                        obj = RelModel.objects.cache.get(v)
+                        cache = RelModel.objects.cache
+                        obj = cache.get(v)
                         if obj is None:
                             # Create an unloaded model
                             obj = RelModel.__new__(RelModel)
+                            cache[v] = obj
                             obj._id = v
                         v = obj
-
 
                 cleaned_state[name] = v
         await super().__restorestate__(cleaned_state, scope)
@@ -1127,6 +1130,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
                 # Save a ref to the object in the model cache
                 db.cache[self._id] = self
+            self.__restored__ = True
             return r
 
     async def delete(self, connection=None):

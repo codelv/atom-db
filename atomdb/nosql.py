@@ -160,12 +160,13 @@ class NoSQLModel(Model):
         db = self.objects
         state = self.__getstate__()
         if self._id is not None:
-            return await db.replace_one({'_id': self._id}, state, upsert=True)
+            r = await db.replace_one({'_id': self._id}, state, upsert=True)
         else:
             r = await db.insert_one(state)
             self._id = r.inserted_id
             db.cache[self._id] = self
-            return r
+        self.__restored__ = True
+        return r
 
     async def delete(self):
         """ Alias to delete this object in the database """

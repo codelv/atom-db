@@ -13,7 +13,8 @@ import os
 import logging
 import traceback
 from atom.api import (
-    Atom, Property, Instance, Dict, Str, Coerced, Value, Typed, Bytes, Bool
+    Atom, Property, Instance, Dict, Str, Coerced, Value, Typed, Bytes, Bool,
+    set_default
 )
 from atom.atom import AtomMeta
 from collections.abc import MutableMapping
@@ -300,7 +301,7 @@ class Model(Atom, metaclass=ModelMeta):
     #: A unique ID used to handle cyclical serialization and deserialization
     __ref__ = Bytes(factory=lambda: b'%0x' % getrandbits(30 * 4))
 
-    #: Flag to indicate if this model has been restored
+    #: Flag to indicate if this model has been restored or saved
     __restored__ = Bool().tag(store=False)
 
     #: State set when restored from the database. This should be updated
@@ -485,3 +486,4 @@ class JSONModel(Model):
     #: JSON cannot encode bytes
     _id = Str()
     __ref__ = Str(factory=lambda: (b'%0x' % getrandbits(30 * 4)).decode())
+    __restored__ = set_default(True)

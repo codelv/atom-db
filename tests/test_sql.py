@@ -480,9 +480,12 @@ async def test_query_many_to_one(db):
     JobRole.objects.cache.clear()
 
     roles = await JobRole.objects.all()
+    used = set()
     for role in roles:
         assert role.job is not None
-        assert role.job.__restored__ == False
+        if role.job not in used:
+            assert role.job.__restored__ == False
+            used.add(role.job)
         await role.job.load()
         assert role.job.__restored__ == True
 
