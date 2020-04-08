@@ -199,3 +199,21 @@ async def test_circular(db):
     assert r.title == p.title
     assert r.related[0].title == related_page.title
     assert r.related[0].related[0] == r
+
+
+@pytest.mark.asyncio
+async def test_load(db):
+    # That an object can be loaded by setting the ID and calling load.
+    await User.objects.drop()
+
+    authors = [
+        User(name=faker.name(), active=True) for i in range(2)
+    ]
+    for a in authors:
+        await a.save()
+
+    user = User(_id=authors[0]._id)
+    assert not user.name and not user.__restored__
+    await user.load()
+    assert user.name == authors[0].name
+

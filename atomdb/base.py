@@ -448,7 +448,7 @@ class JSONSerializer(ModelSerializer):
             return s
         if isinstance(v, bytes):
             py_type = 'bytes'
-            return {'__py__': 'bytes', 'bytes': b64encode(v)}
+            return {'__py__': 'bytes', 'bytes': b64encode(v).decode()}
         return super().flatten(v, scope)
 
     def flatten_object(self, obj, scope):

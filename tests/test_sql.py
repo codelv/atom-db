@@ -6,7 +6,7 @@ import random
 import atomdb.sql
 import sqlalchemy as sa
 from atom.api import *
-from atomdb.sql import SQLModel, SQLModelManager, Relation
+from atomdb.sql import JSONModel, SQLModel, SQLModelManager, Relation
 from datetime import datetime, date, time
 from faker import Faker
 from pprint import pprint
@@ -45,6 +45,10 @@ class JobRole(SQLModel):
     job = Instance(Job)
 
 
+class ImageInfo(JSONModel):
+    depth = Int()
+
+
 class Image(SQLModel):
     name = Str().tag(length=100)
     path = Str().tag(length=200)
@@ -54,6 +58,9 @@ class Image(SQLModel):
 
     # Maps to sa.ARRAY, must include the item_type tag
     size = Instance(tuple).tag(nullable=True, item_type=int)
+
+    #: Maps to sa.JSON
+    info = Instance(ImageInfo, ())
 
 
 class Page(SQLModel):

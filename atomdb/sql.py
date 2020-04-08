@@ -1069,6 +1069,8 @@ class SQLModel(Model, metaclass=SQLMeta):
                             cache[v] = obj
                             obj._id = v
                         v = obj
+                    elif issubclass(RelModel, JSONModel):
+                        v = await RelModel.restore(v)
 
                 cleaned_state[name] = v
         await super().__restorestate__(cleaned_state, scope)

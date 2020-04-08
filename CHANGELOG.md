@@ -1,3 +1,7 @@
+# 0.3.8
+- Properly restore JSONModel instances that have no `__model__` in the dict
+when migrated from a dict or regular JSON field.
+
 # 0.3.7
 
 - Add a `__restored__` member to models and a `load` method so foreign keys
