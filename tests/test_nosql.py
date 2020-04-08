@@ -214,6 +214,16 @@ async def test_load(db):
 
     user = User(_id=authors[0]._id)
     assert not user.name and not user.__restored__
+
+    # Load should do nothing if already restored (which is faked here)
+    user.__restored__ = True
+    await user.load()
+    assert not user.name
+
+    # Now ensure a normal load works
+    user.__restored__ = False
     await user.load()
     assert user.name == authors[0].name
+
+
 

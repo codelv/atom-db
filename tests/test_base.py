@@ -40,6 +40,9 @@ async def test_model():
 
     # Not implemented for abstract models
     with pytest.raises(NotImplementedError):
+        await m.load()
+
+    with pytest.raises(NotImplementedError):
         await m.save()
 
     with pytest.raises(NotImplementedError):
