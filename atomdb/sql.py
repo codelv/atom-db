@@ -1077,14 +1077,13 @@ class SQLModel(Model, metaclass=SQLMeta):
 
     async def load(self, connection=None):
         """ Alias to load this object from the database """
-        if self.__restored__:
+        if self.__restored__ or self._id is None:
             return # Already loaded
         db = self.objects
-        if self._id is not None:
-            q = db.query(None, _id=self._id)
-            state = await db.fetchone(q, connection=connection)
-            if state is not None:
-                await self.__restorestate__(state)
+        q = db.query(None, _id=self._id)
+        state = await db.fetchone(q, connection=connection)
+        if state is not None:
+            await self.__restorestate__(state)
 
     async def save(self, force_insert=False, force_update=False,
                    connection=None):

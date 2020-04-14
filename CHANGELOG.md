@@ -1,3 +1,7 @@
+# 0.3.9
+
+- Let a member be tagged with a custom `unflatten` function
+
 # 0.3.8
 - Properly restore JSONModel instances that have no `__model__` in the dict
 when migrated from a dict or regular JSON field.

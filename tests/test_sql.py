@@ -413,6 +413,10 @@ async def test_filters(db):
     with pytest.raises(ValueError):
         users = await User.objects.filter(age__=1)
 
+    # Invalid name
+    with pytest.raises(ValueError):
+        users = await User.objects.filter(does_not_exist=True)
+
 
 @pytest.mark.asyncio
 async def test_column_rename(db):

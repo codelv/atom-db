@@ -348,7 +348,6 @@ class Model(Atom, metaclass=ModelMeta):
             The __ref__ value is used as the keys.
 
         """
-        unflatten = self.serializer.unflatten
         name = state.get('__model__', self.__model__)
         if name != self.__model__:
             raise ValueError(f"Trying to use {name} state for "
@@ -361,22 +360,25 @@ class Model(Atom, metaclass=ModelMeta):
 
         # Order the keys by the members 'setstate_order' if given
         valid_keys = []
+        default_unflatten = self.serializer.unflatten
         for k in state.keys():
             m = members.get(k)
             if m is not None:
-                if m.metadata:
-                    order = m.metadata.get('setstate_order', 1000)
-                else:
-                    order = 1000
-                valid_keys.append((order, k))
-        valid_keys.sort()
+                meta = m.metadata or {}
+                order = meta.get('setstate_order', 1000)
+
+                # Allow  tagging a custom unflatten fn
+                unflatten = meta.get('unflatten', default_unflatten)
+
+                valid_keys.append((order, k, unflatten))
+        valid_keys.sort(key=lambda it: it[0])
 
         # Save initial database state
         # self.__state__ = dict(state)
 
-        for order, k in valid_keys:
-            v = state[k]
+        for order, k, unflatten in valid_keys:
             try:
+                v = state[k]
                 obj = await unflatten(v, scope)
                 setattr(self, k, obj)
             except Exception as e:
