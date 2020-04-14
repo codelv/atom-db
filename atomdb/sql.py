@@ -420,14 +420,13 @@ class SQLModelManager(ModelManager):
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
-        try:
-            return self.proxies[cls]
-        except KeyError:
+        proxy = self.proxies.get(cls)
+        if proxy is None:
             table = cls.__table__
             if table is None:
                 table = cls.__table__ = create_table(cls, self.metadata)
             proxy = self.proxies[cls] = SQLTableProxy(table=table, model=cls)
-            return proxy
+        return proxy
 
     def _default_database(self):
         raise EnvironmentError("No database engine has been set. Use "
