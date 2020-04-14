@@ -48,13 +48,12 @@ class NoSQLModelSerializer(ModelSerializer):
         ref = obj.__ref__
         if ref in scope:
             return {'__ref__': ref, '__model__': obj.__model__}
-        else:
-            scope[ref] = obj
+        scope[ref] = obj
         state = obj.__getstate__(scope)
         _id = state.get("_id")
-        return {'_id': _id,
-                '__ref__': ref,
-                '__model__': state['__model__']} if _id else state
+        if _id is None:
+            return state
+        return {'_id': _id, '__ref__': ref, '__model__': obj.__model__}
 
     def _default_registry(self):
         """ Add all nosql and json models to the registry
@@ -96,12 +95,11 @@ class NoSQLModelManager(ModelManager):
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the collection when used from a Model
-        try:
-            return self.proxies[cls]
-        except KeyError:
+        proxy = self.proxies.get(cls)
+        if proxy is None:
             proxy = self.proxies[cls] = NoSQLDatabaseProxy(
                 table=self.database[cls.__model__])
-            return proxy
+        return proxy
 
     def _default_database(self):
         raise EnvironmentError("No database has been set. Use "
@@ -147,24 +145,23 @@ class NoSQLModel(Model):
 
     async def load(self):
         """ Alias to load this object from the database """
-        if self.__restored__:
-            return # Already loaded
-        db = self.objects
-        if self._id is not None:
-            state = await db.find_one({'_id': self._id})
-            if state is not None:
-                await self.__restorestate__(state)
+        pk = self._id
+        if self.__restored__ or pk is None:
+            return # Already loaded or nothing to load
+        state = await self.objects.find_one({'_id': pk})
+        if state is not None:
+            await self.__restorestate__(state)
 
     async def save(self):
         """ Alias to delete this object to the database """
         db = self.objects
         state = self.__getstate__()
-        if self._id is not None:
-            r = await db.replace_one({'_id': self._id}, state, upsert=True)
-        else:
+        if self._id is None:
             r = await db.insert_one(state)
             self._id = r.inserted_id
             db.cache[self._id] = self
+        else:
+            r = await db.replace_one({'_id': self._id}, state, upsert=True)
         self.__restored__ = True
         return r
 
