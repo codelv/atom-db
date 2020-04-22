@@ -317,17 +317,28 @@ class Model(Atom, metaclass=ModelMeta):
     serializer = None
 
     def __getstate__(self, scope=None):
-        state = super(Model, self).__getstate__()
-        flatten = self.serializer.flatten
+        default_flatten = self.serializer.flatten
 
         scope = scope or {}
+
+        # ID for circular references
         ref = self.__ref__
         scope[ref] = self
-        state = {f: flatten(state[f], scope) for f in self.__fields__}
-        state['__model__'] = self.__model__
-        state['__ref__'] = ref # ID for circular references
+
+        state = {
+            '__model__': self.__model__,
+            '__ref__': ref,
+        }
         if self._id is not None:
             state['_id'] = self._id
+
+        members = self.members()
+        for f in self.__fields__:
+            m = members[f]
+            meta = m.metadata or {}
+            flatten = meta.get('flatten', default_flatten)
+            state[f] = flatten(getattr(self, f), scope)
+
         return state
 
     async def __restorestate__(self, state, scope=None):

@@ -1,3 +1,11 @@
+# 0.3.11
+
+- Let a member be tagged with a custom `flatten` function
+
+# 0.3.10
+
+- Fix bug in SQLModel load using `_id` which is not a valid field
+
 # 0.3.9
 
 - Let a member be tagged with a custom `unflatten` function

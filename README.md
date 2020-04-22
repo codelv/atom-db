@@ -32,7 +32,11 @@ The design is based somewhat on django.
 There is a "manager" called `Model.objects` to do queries on the database table
 created for each subclass.
 
-Serialization and deserialization is done with `Model.serializer`
+Serialization and deserialization is done with `Model.serializer`.
+
+> Note: As of 0.3.11 serialization can be customizer per member by tagging the
+member with a `flatten` or `unflatten` which should be a async callable which
+accepts the value and scope.
 
 Each `Model` has async `save`, `delete`, and `restore` methods to interact with
 the database. This can be customized if needed using
@@ -355,7 +359,6 @@ assert not await User.objects.find_one({'name': "Tom"})
 
 You can exclude members from being saved to the DB by tagging them
 with `.tag(store=False)`.
-
 
 
 ## Contributing
