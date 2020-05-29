@@ -13,12 +13,13 @@ import os
 import logging
 import datetime
 import weakref
+import asyncio
 import sqlalchemy as sa
 from atom import api
 from atom.atom import AtomMeta
 from atom.api import (
     Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance, Value, Bool
+    ForwardInstance, Value, Bool, List
 )
 from functools import wraps
 from sqlalchemy.engine import ddl, strategies
@@ -111,6 +112,9 @@ class Relation(ContainerList):
         super(Relation, self).__init__(ForwardInstance(item), default=None)
         self._to = None
 
+    def resolve(self):
+        return self.to
+
     @property
     def to(self):
         to = self._to
@@ -174,6 +178,39 @@ def resolve_member_type(member):
         return member.resolve()
     else:
         return member.validate_mode[-1]
+
+
+def resolve_member_column(model, field):
+    """ Get the sqlalchemy column for the given model and field.
+
+    Parameters
+    ----------
+    model: atomdb.sql.Model
+        The model to lookup
+    field: String
+        The field name
+
+    Returns
+    -------
+    result: Tuple[Table, Column]
+        A tuple containing the through table (or None) and the
+        sqlalchemy column.
+
+    """
+    if model is None:
+        return None, None
+    through = None
+    m = model.members().get(field)
+    if m is not None:
+        if m.metadata:
+            # If the field has a different name assigned use that
+            field = m.metadata.get('name', field)
+        if isinstance(m, Relation):
+            # Support looking up columns through a relation by the pk
+            model = m.to
+            through = field
+            field = model.__pk__
+    return through, model.objects.table.columns.get(field)
 
 
 def atom_member_to_sql_column(model, member, **kwargs):
@@ -580,68 +617,6 @@ class SQLTableProxy(Atom):
             r = await conn.execute(query)
             return await r.scalar()
 
-    async def filter(self, **filters):
-        """ Selects the objects matching the given filters
-
-        Parameters
-        ----------
-        filters: Dict
-            The filters to select which objects to delete
-
-        Returns
-        -------
-        result: List[Model]
-            A list of objects matching the response
-
-        """
-        restore = self.model.restore
-        q = self.query(None, **filters)
-        connection = filters.get(self.connection_kwarg)
-        return [await restore(row)
-                for row in await self.fetchall(q, connection=connection)]
-
-    async def delete(self, **filters):
-        """ Delete the objects matching the given filters
-
-        Parameters
-        ----------
-        filters: Dict
-            The filters to select which objects to delete
-
-        Returns
-        -------
-        result: Response
-            The execute response
-
-        """
-        q = self.query('delete', **filters)
-        connection = filters.get(self.connection_kwarg)
-        async with self.connection(connection) as conn:
-            return await conn.execute(q)
-
-    async def all(self, **kwargs):
-        return await self.filter(**kwargs)
-
-    async def get(self, **filters):
-        """ Get a model matching the given criteria
-
-        Parameters
-        ----------
-        filters: Dict
-            The filters to use to retrieve the object
-
-        Returns
-        -------
-        result: Model or None
-            The model matching the query or None.
-
-        """
-        q = self.query(None, **filters)
-        connection = filters.get(self.connection_kwarg)
-        row = await self.fetchone(q, connection=connection)
-        if row is not None:
-            return await self.model.restore(row)
-
     async def get_or_create(self, **filters):
         """ Get or create a model matching the given criteria
 
@@ -688,128 +663,279 @@ class SQLTableProxy(Atom):
         await obj.save(force_insert=True, connection=connection)
         return obj
 
-    async def count(self, **filters):
-        """ Return a count of objects in the table matching the given filters
+    def __getattr__(self, name):
+        """ All other fields are delegated to the query set
 
         """
-        q = self.query('count', **filters)
-        connection = filters.get(self.connection_kwarg)
-        return await self.scalar(q, connection=connection)
+        return getattr(SQLQuerySet(proxy=self), name)
 
-    def query(self, __q__=None, **filters):
-        """ Build a django-style query by adding a where clause to the given
-        query.
+
+class SQLQuerySet(Atom):
+    #: Proxy
+    proxy = Instance(SQLTableProxy)
+    connection = Value()
+
+    filter_clauses = List()
+    related_clauses = List()
+    order_clauses = List()
+    limit_count = Int()
+    query_offset = Int()
+
+    def query(self, query_type='select', **kwargs):
+        if kwargs:
+            return self.filter(**kwargs).query(query_type)
+        p = self.proxy
+        tables = [p.table]
+        from_table = p.table
+        model = p.model
+        members = model.members()
+        use_labels = bool(self.related_clauses)
+
+        for clause in self.related_clauses:
+            from_table = p.table
+            for part in clause.split("__"):
+                m = members.get(part)
+                rel_model = resolve_member_type(m)
+                table = rel_model.objects.table
+                from_table = sa.join(from_table, table)
+                tables.append(table)
+
+        if query_type == 'select':
+            q = sa.select(tables, use_labels=use_labels)
+            q = q.select_from(from_table)
+        elif query_type == 'delete':
+            q = sa.delete(from_table)
+        else:
+            raise ValueError("Unsupported query type")
+
+        if self.filter_clauses:
+            if len(self.filter_clauses) == 1:
+                q = q.where(self.filter_clauses[0])
+            else:
+                q = q.where(sa.and_(*self.filter_clauses))
+
+        if self.order_clauses:
+            q = q.order_by(*self.order_clauses)
+
+        if self.limit_count:
+            q = q.limit(self.limit_count)
+
+        if self.query_offset:
+            q = q.offset(self.query_offset)
+
+        return q
+
+    def select_related(self, *related):
+        return self.clone(related_clauses=self.related_clauses + related)
+
+    def order_by(self, *args):
+        """ Order the query by the given fields.
 
         Parameters
         ----------
-        __q__: Query or String
-            The query to add a where clause to. Will default to select if not
-            given.
-        filters: Dict
-            A dict where keys are mapped to columns and values. Use __ to
-            specify an operator. For example (date__gt=datetime.now())
+        args: List[str]
+            Fields to order by. A "~" prefix denotes decending.
 
         Returns
         -------
-        query: Query
-            An sqlalchemy query which an be used with execute, fetchall, etc..
-
-        References
-        ----------
-        1. https://docs.sqlalchemy.org/en/latest/core/sqlelement.html
-            ?highlight=column#sqlalchemy.sql.operators.ColumnOperators
+        query: SQLQuerySet
+            A clone of this queryset with the ordering terms added.
 
         """
-        connection_kwarg = self.connection_kwarg
-        ops = []
-        joins = {}
+        order_clauses = self.order_clauses
+        related_clauses = self.related_clauses
+        model = self.proxy.model
+        for arg in args:
+            if not arg:
+                continue
+
+            if arg[0] == '~':
+                arg = arg[1:]
+                ascending = False
+            else:
+                ascending = True
+
+            *related_parts, field = arg.split("__")
+            if related_parts:
+                rel_model = model
+                clause = "__".join(related_parts)
+                if clause not in related_clauses:
+                    related_clauses.append(clause)
+
+                # Follow the FK lookups
+                for part in related_parts:
+                    m = rel_model.members().get(part)
+                    if m is None:
+                        break  # Invalid lookup
+                    rel_model = resolve_member_type(m)
+                through_table, col = resolve_member_column(rel_model, field)
+            else:
+                through_table, col = resolve_member_column(model, field)
+
+            if col is None:
+                raise ValueError("Invalid order by '%s' on %s" % (arg, model))
+
+            if through_table is not None:
+                related_clauses.append(through_table)
+
+            if ascending:
+                clause = col.asc()
+            else:
+                clause = col.desc()
+
+            if clause not in order_clauses:
+                order_clauses.append(clause)
+        return self.clone(order_clauses=order_clauses,
+                          related_clauses=related_clauses)
+
+    def filter(self, **kwargs):
+        """ Filter the query by the given parameters.
+
+        Parameters
+        ----------
+        kwargs: Dict[str, object]
+            Filters to use
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the filter terms added.
+
+        """
+        p = self.proxy
+        filter_clauses = self.filter_clauses
+        related_clauses = self.related_clauses
+
+        connection_kwarg = p.connection_kwarg
+        model = p.model
 
         # Build the filter operations
-        for k, v in filters.items():
+        for k, v in kwargs.items():
+            # Ignore connection parameter
             if k == connection_kwarg:
-                continue # Skip the connection parameter if given
+                continue
 
-            columns = self.table.c
-            cls = self.model
+            op = "eq"
+            if "__" in k:
+                parts = k.split("__")
+
+                i = -1
+                if parts[-1] in QUERY_OPS:
+                    op = parts[-1]
+                    i = -2
+                field = parts[i]
+                related_parts = parts[:i]
+
+                rel_model = model
+                if related_parts:
+                    clause = "__".join(related_parts)
+                    if clause not in related_clauses:
+                        related_clauses.append(clause)
+
+                    # Follow the FK lookups
+                    for part in related_parts:
+                        m = rel_model.members().get(part)
+                        if m is None:
+                            break  # Invalid lookup
+                        rel_model = resolve_member_type(m)
+
+                through_table, col = resolve_member_column(rel_model, field)
+            else:
+                through_table, col = resolve_member_column(model, k)
+
+            if col is None:
+                raise ValueError("Invalid filter %s on %s" % (k, model))
+
+            if through_table is not None:
+                related_clauses.append(through_table)
 
             # Support lookups by model
             if isinstance(v, Model):
                 v = v.serializer.flatten_object(v, scope=None)
+            elif op in ('in', 'notin'):
+                # Flatten lists when using in or notin ops
+                v = model.serializer.flatten(v, scope=None)
 
-            # Support related lookups or operations like __in
-            if '__' in k:
-                args = k.split('__')
-                n = len(args)
-                if n == 1:
-                    raise ValueError("Invalid filter %s on %s" % (k, cls))
-                if n > 3:
-                    raise NotImplementedError(MULTI_JOIN_ERROR)
+            clause = getattr(col, QUERY_OPS[op])(v)
+            filter_clauses.append(clause)
 
-                field = args[0]
-                op = QUERY_OPS.get(args[-1], None)
+        return self.clone(filter_clauses=filter_clauses,
+                          related_clauses=related_clauses)
 
-                # This is a lookup on a related field or a operation on a
-                # related field so figure out which case
-                if op is None or n == 3:
-                    if n == 2:
-                        op = '__eq__'
-                    elif op is None:
-                        raise NotImplementedError(MULTI_JOIN_ERROR)
-
-                    member = getattr(cls, field, None)
-                    if not isinstance(member, FK_TYPES):
-                        raise ValueError("Invalid filter %s on %s" % (k, cls))
-
-                    # Set the Model to the related field model
-                    cls = resolve_member_type(member)
-                    table = cls.objects.table
-
-                    # Specify the join
-                    on = columns[self.model.__pk__] == table.c[cls.__pk__]
-                    joins[table] = on
-                    columns = table.c
-
-                    # Since this is a joined lookup change the field
-                    field = args[1]
-
-            else:
-                # Simple case
-                op = '__eq__'
-                field = k
-
-            # Get the column from the sqlalchemy table
-            try:
-                col = columns[field]
-            except KeyError:
-                # If the field has a different name assigned use that
-                member = getattr(cls, field, None)
-                if member is None:
-                    raise ValueError(
-                        "Invalid filter %s on %s" % (k, self.model))
-                name = member.metadata['name']
-                col = columns[name]
-
-            ops.append((col, op, v))
-
-        # Build the base query, joining as needed
-        q = self.table
-        for table, on in joins.items():
-            q = q.join(table, on)
-
-        if __q__ is None:
-            q = q.select(use_labels=bool(joins))
-        elif isinstance(__q__, str):
-            # This is needed to support joins
-            # select, count, delete, etc...
-            q = getattr(q, __q__)()
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            offset = key.start or 0
+            limit = key.stop - key.start if key.stop else 0
+        elif isinstance(key, int):
+            limit = 1
+            offset = key
         else:
-            q = __q__
+            raise TypeError("Invalid key")
+        if offset < 0:
+            raise ValueError("Cannot use a negative offset")
+        if limit < 0:
+            raise ValueError("Cannot use a negative limit")
+        return self.clone(limit_count=limit, query_offset=offset)
 
-        # Filter the query
-        for (col, op, v) in ops:
-            q = q.where(getattr(col, op)(v))
+    def limit(self, limit):
+        return self.clone(limit_count=limit)
 
-        return q
+    def offset(self, offset):
+        return self.clone(query_offset=offset)
+
+    async def count(self, **kwargs):
+        if kwargs:
+            return await self.filter(**kwargs).count()
+        subq = self.query('select').alias('subquery')
+        q = sa.func.count().select().select_from(subq)
+        return await self.proxy.scalar(q)
+
+    async def exists(self, **kwargs):
+        if kwargs:
+            return await self.filter(**kwargs).exists()
+        q = sa.exists(self.query('select')).select()
+        return await self.proxy.scalar(q, connection=self.connection)
+
+    async def delete(self, **kwargs):
+        if kwargs:
+            return await self.filter(**kwargs).delete()
+        q = self.query('delete')
+        return await self.proxy.execute(q, connection=self.connection)
+
+    def __await__(self):
+        # So await Model.objects.filter() works
+        f = asyncio.ensure_future(self.all())
+        yield from f
+        return f.result()
+
+    async def all(self, **kwargs):
+        if kwargs:
+            return await self.filter(**kwargs).all()
+        q = self.query('select')
+        restore = self.proxy.model.restore
+        cursor = await self.proxy.fetchall(q, connection=self.connection)
+        return [await restore(row) for row in cursor]
+
+    async def get(self, **kwargs):
+        if kwargs:
+            return await self.filter(**kwargs).get()
+        q = self.query('select')
+        row = await self.proxy.fetchone(q, connection=self.connection)
+        if row is not None:
+            return await self.proxy.model.restore(row)
+
+    def clone(self, **kwargs):
+        state = {
+            'proxy': self.proxy,
+            'connection': self.connection,
+            'filter_clauses': self.filter_clauses,
+            'related_clauses': self.related_clauses,
+            'limit_count': self.limit_count,
+            'order_clauses': self.order_clauses,
+            'query_offset': self.query_offset,
+        }
+        state.update(kwargs)
+        return self.__class__(**state)
 
 
 class SQLBinding(Atom):

@@ -126,7 +126,7 @@ async def reset_tables(*models):
         except Exception as e:
             msg = str(e)
             if not any(['Unknown table' in msg, 'does not exist' in msg]):
-                raise # Unexpected error
+                raise  # Unexpected error
         await Model.objects.create_table()
 
 
@@ -234,6 +234,10 @@ async def test_query(db):
     for user in await User.objects.filter(name=user.name):
         print(user)
 
+
+    assert await User.objects.filter(name=user.name).exists()
+    assert not await User.objects.filter(name="I DO NOT EXIST").exists()
+
     # Delete one
     await User.objects.delete(name=user.name)
     assert len(await User.objects.all()) == 9
@@ -263,12 +267,89 @@ async def test_query_related(db):
     assert len(roles) == 1
     assert await JobRole.objects.count(job__name=job2.name) == 1
 
+    roles = await JobRole.objects.filter(job=job2)
+    assert len(roles) == 1 and roles[0] == role2
+
+    roles = await JobRole.objects.filter(job__in=[job2])
+    assert len(roles) == 1 and roles[0] == role2
+
     roles = await JobRole.objects.filter(job__name__not='none of the above')
     assert len(roles) == 3
 
     # Cant do multiple joins
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         roles = await JobRole.objects.get(job__name__other=1)
+
+
+@pytest.mark.asyncio
+async def test_query_related_reverse(db):
+    await reset_tables(User, Job, JobRole)
+
+    job = await Job.objects.create(name=faker.job())
+    job1 = await Job.objects.create(name=faker.job())
+    job2 = await Job.objects.create(name=faker.job())
+
+    role = await JobRole.objects.create(job=job, name=faker.job())
+    role1 = await JobRole.objects.create(job=job1, name=faker.job())
+    role2 = await JobRole.objects.create(job=job2, name=faker.job())
+
+    jobs = await Job.objects.filter(roles__name=role1.name)
+    assert jobs == [job1]
+
+    jobs = await Job.objects.filter(roles__in=[role, role2])
+    assert jobs == [job, job2]
+
+    assert await Job.objects.filter(roles__in=[role, role2]).count() == 2
+
+
+@pytest.mark.asyncio
+async def test_query_order_by(db):
+    await reset_tables(User)
+    # Create second user
+    users = []
+    for i in range(3):
+        user = User(name=faker.name(), email=faker.email(), age=i, active=True)
+        await user.save()
+        users.append(user)
+
+    users.sort(key=lambda it: it.name)
+    assert await User.objects.order_by('name').all() == users
+
+    users.reverse()
+    assert await User.objects.order_by('~name').all() == users
+
+
+@pytest.mark.asyncio
+async def test_query_limit(db):
+    await reset_tables(User)
+    # Create second user
+    users = []
+    for i in range(3):
+        user = User(name=faker.name(), email=faker.email(), age=i, active=True)
+        await user.save()
+        users.append(user)
+
+    assert len(await User.objects.limit(2).all()) == 2
+    assert len(await User.objects.offset(2).all()) == 1
+
+    assert len(await User.objects.filter()[1:2].all()) == 1
+    assert len(await User.objects.filter()[1:].all()) == 2
+    assert len(await User.objects.filter()[0].all()) == 1
+
+    # Keys must be integers
+    with pytest.raises(TypeError):
+        User.objects.filter()[1.2]
+
+    with pytest.raises(TypeError):
+        User.objects.filter()[1.2:3]
+
+    # No negative offests
+    with pytest.raises(ValueError):
+        User.objects.filter()[-1]
+
+    # No negative limits
+    with pytest.raises(ValueError):
+        User.objects.filter()[0:-1]
 
 
 @pytest.mark.asyncio
@@ -322,15 +403,16 @@ async def test_transaction_rollback(db):
             trans = await conn.begin()
             try:
                 # Must pass in the connection parameter for transactions
-                job = await Job.objects.create(name=faker.job(), connection=conn)
+                job = await Job.objects.create(
+                    name=faker.job(), connection=conn)
                 assert job._id is not None
                 for i in range(3):
-                    role = await JobRole.objects.create(job=job, name=faker.job(),
-                                                connection=conn)
+                    role = await JobRole.objects.create(
+                        job=job, name=faker.job(), connection=conn)
                     assert role._id is not None
                 complete = True
                 raise ValueError("Oh crap, I didn't want to do that")
-            except:
+            except Exception as e:
                 await trans.rollback()
                 rollback = True
                 raise
@@ -354,8 +436,8 @@ async def test_transaction_commit(db):
             job = await Job.objects.create(name=faker.job(), connection=conn)
             assert job._id is not None
             for i in range(3):
-                role = await JobRole.objects.create(job=job, name=faker.job(),
-                                            connection=conn)
+                role = await JobRole.objects.create(
+                    job=job, name=faker.job(), connection=conn)
                 assert role._id is not None
         except:
             await trans.rollback()
@@ -383,7 +465,7 @@ async def test_filters(db):
     # Startswith
     u = await User.objects.get(name__startswith=user.name[0])
     assert u.name == user.name
-    assert u is user # Now cached
+    assert u is user  # Now cached
 
     # In query
     users = await User.objects.filter(name__in=[user.name, user2.name])
@@ -394,7 +476,7 @@ async def test_filters(db):
 
     # Is query
     users = await User.objects.filter(active__is=False)
-    assert len(users) == 1 and users[0].active == False
+    assert len(users) == 1 and users[0].active is False
     assert users[0] is user2 # Now cached
 
     # Not query
@@ -430,12 +512,12 @@ async def test_column_rename(db):
 
     # Check without use labels
     table = Email.objects.table
-    q = table.select().where(table.c.to==e.to)
+    q = table.select().where(table.c.to == e.to)
     row = await Email.objects.fetchone(q)
     assert row['from'] == e.from_, 'Column rename failed'
 
     # Check with use labels
-    q = table.select(use_labels=True).where(table.c.to==e.to)
+    q = table.select(use_labels=True).where(table.c.to == e.to)
     row = await Email.objects.fetchone(q)
     assert row[f'{table.name}_from'] == e.from_, 'Column rename failed'
 
@@ -473,7 +555,7 @@ async def test_query_many_to_one(db):
 
         # Job should be restored from the cache
         assert role.job is not None
-        assert role.job.__restored__ == True
+        assert role.job.__restored__ is True
         #for role in job.roles:
         #    assert role.job == job
         loaded.append(job)
@@ -484,7 +566,7 @@ async def test_query_many_to_one(db):
     roles = await JobRole.objects.all()
     for role in roles:
         assert role.job is not None
-        assert role.job.__restored__ == True
+        assert role.job.__restored__ is True
 
     # Clear cache and ensure it doesn't pull from cache now
     Job.objects.cache.clear()
@@ -495,10 +577,10 @@ async def test_query_many_to_one(db):
     for role in roles:
         assert role.job is not None
         if role.job not in used:
-            assert role.job.__restored__ == False
+            assert role.job.__restored__ is False
             used.add(role.job)
         await role.job.load()
-        assert role.job.__restored__ == True
+        assert role.job.__restored__ is True
 
 
 @pytest.mark.asyncio
@@ -566,11 +648,13 @@ def test_abstract_tables():
 
     class CustomUserWithMeta(AbstractUser):
         data = Dict()
+
         class Meta:
             db_table = 'custom_user'
 
     class AbstractCustomUser(AbstractUser):
         data = Dict()
+
         class Meta(AbstractUser.Meta):
             db_table = 'custom_user2'
 

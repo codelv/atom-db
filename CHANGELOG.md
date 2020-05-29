@@ -1,3 +1,12 @@
+# 0.4.0
+
+- Refactor SQL queries so they can be chained
+    ex `Model.objects.filter(name="Something").filter(age__gt=18)`
+- Add `order_by`, `limit`, and `offset`
+- Support filtering using django-style reverse foreign key lookups,
+    ex `Model.objects.filter(groups_in=[group1, group2])`
+- Refactor count to support counting over joins
+
 # 0.3.11
 
 - Let a member be tagged with a custom `flatten` function
