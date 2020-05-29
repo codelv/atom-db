@@ -24,10 +24,10 @@ services:
 
 install:
   # Setup
-  - pip install atom motor sqlalchemy aiomysql aiopg
+  - pip install -U atom motor sqlalchemy aiomysql aiopg
 
   # Testing
-  - pip install codecov pytest pytest-coverage pytest-asyncio faker
+  - pip install -U codecov pytest pytest-coverage pytest-asyncio faker
 
   # Install
   - python setup.py develop
