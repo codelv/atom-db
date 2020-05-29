@@ -53,8 +53,6 @@ QUERY_OPS = {
     'lte': '__le__',
     'all': 'all_',
     'any': 'any_',
-    #'and': 'and_',
-    #'or': 'or_',
     'ne': '__ne__',
     'not': '__ne__',
     'contains': 'contains',
@@ -180,7 +178,7 @@ def resolve_member_type(member):
         return member.validate_mode[-1]
 
 
-def resolve_member_column(model, field):
+def resolve_member_column(model, field, related_clauses=None):
     """ Get the sqlalchemy column for the given model and field.
 
     Parameters
@@ -197,9 +195,29 @@ def resolve_member_column(model, field):
         sqlalchemy column.
 
     """
-    if model is None:
-        return None, None
-    through = None
+    if model is None or not field:
+        raise ValueError("Invalid field %s on %s" % (field, model))
+
+    # Walk the relations
+    *related_parts, field = field.split("__")
+    if related_parts:
+        clause = "__".join(related_parts)
+        if related_clauses is not None and clause not in related_clauses:
+            related_clauses.append(clause)
+
+        # Follow the FK lookups
+        # Rename so the original lookup path is retained if an error occurs
+        rel_model = model
+        for part in related_parts:
+            m = rel_model.members().get(part)
+            if m is None:
+                raise ValueError("Invalid field %s on %s" % (field, model))
+            rel_model = resolve_member_type(m)
+            if rel_model is None:
+                raise ValueError("Invalid field %s on %s" % (field, model))
+        model = rel_model
+
+    # Lookup the member
     m = model.members().get(field)
     if m is not None:
         if m.metadata:
@@ -208,9 +226,18 @@ def resolve_member_column(model, field):
         if isinstance(m, Relation):
             # Support looking up columns through a relation by the pk
             model = m.to
-            through = field
+
+            # Add the through table to the related clauses if needed
+            if related_clauses is not None and field not in related_clauses:
+                related_clauses.append(field)
+
             field = model.__pk__
-    return through, model.objects.table.columns.get(field)
+
+    # Finally get the column from the table
+    col = model.objects.table.columns.get(field)
+    if col is None:
+        raise ValueError("Invalid field %s on %s" % (field, model))
+    return col
 
 
 def atom_member_to_sql_column(model, member, **kwargs):
@@ -681,7 +708,12 @@ class SQLQuerySet(Atom):
     limit_count = Int()
     query_offset = Int()
 
-    def query(self, query_type='select', **kwargs):
+    def clone(self, **kwargs):
+        state = self.__getstate__()
+        state.update(kwargs)
+        return self.__class__(**state)
+
+    def query(self, query_type='select', *columns, **kwargs):
         if kwargs:
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
@@ -701,7 +733,7 @@ class SQLQuerySet(Atom):
                 tables.append(table)
 
         if query_type == 'select':
-            q = sa.select(tables, use_labels=use_labels)
+            q = sa.select(columns or tables, use_labels=use_labels)
             q = q.select_from(from_table)
         elif query_type == 'delete':
             q = sa.delete(from_table)
@@ -742,41 +774,21 @@ class SQLQuerySet(Atom):
             A clone of this queryset with the ordering terms added.
 
         """
-        order_clauses = self.order_clauses
-        related_clauses = self.related_clauses
+        order_clauses = self.order_clauses[:]
+        related_clauses = self.related_clauses[:]
         model = self.proxy.model
         for arg in args:
             if not arg:
                 continue
 
             if arg[0] == '~':
-                arg = arg[1:]
+                field = arg[1:]
                 ascending = False
             else:
+                field = arg
                 ascending = True
 
-            *related_parts, field = arg.split("__")
-            if related_parts:
-                rel_model = model
-                clause = "__".join(related_parts)
-                if clause not in related_clauses:
-                    related_clauses.append(clause)
-
-                # Follow the FK lookups
-                for part in related_parts:
-                    m = rel_model.members().get(part)
-                    if m is None:
-                        break  # Invalid lookup
-                    rel_model = resolve_member_type(m)
-                through_table, col = resolve_member_column(rel_model, field)
-            else:
-                through_table, col = resolve_member_column(model, field)
-
-            if col is None:
-                raise ValueError("Invalid order by '%s' on %s" % (arg, model))
-
-            if through_table is not None:
-                related_clauses.append(through_table)
+            col = resolve_member_column(model, field, related_clauses)
 
             if ascending:
                 clause = col.asc()
@@ -788,13 +800,16 @@ class SQLQuerySet(Atom):
         return self.clone(order_clauses=order_clauses,
                           related_clauses=related_clauses)
 
-    def filter(self, **kwargs):
-        """ Filter the query by the given parameters.
+    def filter(self, *args, **kwargs):
+        """ Filter the query by the given parameters. This accepts sqlalchemy
+        filters by arguments and django-style parameters as kwargs.
 
         Parameters
         ----------
+        args: List
+            List of sqlalchemy filters
         kwargs: Dict[str, object]
-            Filters to use
+            Django style filters to use
 
         Returns
         -------
@@ -803,51 +818,24 @@ class SQLQuerySet(Atom):
 
         """
         p = self.proxy
-        filter_clauses = self.filter_clauses
-        related_clauses = self.related_clauses
+        filter_clauses = self.filter_clauses + list(args)
+        related_clauses = self.related_clauses[:]
 
         connection_kwarg = p.connection_kwarg
-        model = p.model
 
         # Build the filter operations
         for k, v in kwargs.items():
             # Ignore connection parameter
             if k == connection_kwarg:
                 continue
-
+            model = p.model
             op = "eq"
             if "__" in k:
                 parts = k.split("__")
-
-                i = -1
                 if parts[-1] in QUERY_OPS:
                     op = parts[-1]
-                    i = -2
-                field = parts[i]
-                related_parts = parts[:i]
-
-                rel_model = model
-                if related_parts:
-                    clause = "__".join(related_parts)
-                    if clause not in related_clauses:
-                        related_clauses.append(clause)
-
-                    # Follow the FK lookups
-                    for part in related_parts:
-                        m = rel_model.members().get(part)
-                        if m is None:
-                            break  # Invalid lookup
-                        rel_model = resolve_member_type(m)
-
-                through_table, col = resolve_member_column(rel_model, field)
-            else:
-                through_table, col = resolve_member_column(model, k)
-
-            if col is None:
-                raise ValueError("Invalid filter %s on %s" % (k, model))
-
-            if through_table is not None:
-                related_clauses.append(through_table)
+                    k = "__".join(parts[:-1])
+            col = resolve_member_column(model, k, related_clauses)
 
             # Support lookups by model
             if isinstance(v, Model):
@@ -883,22 +871,65 @@ class SQLQuerySet(Atom):
     def offset(self, offset):
         return self.clone(query_offset=offset)
 
-    async def count(self, **kwargs):
-        if kwargs:
-            return await self.filter(**kwargs).count()
+    # -------------------------------------------------------------------------
+    # Query execution API
+    # -------------------------------------------------------------------------
+    async def values(self, *args, distinct=False, flat=False):
+        """ Returns the results as a list of dict instead of models.
+
+        Parameters
+        ----------
+        args: List[str or column]
+            List of columns to select
+        distinct: Bool
+            Return only distinct rows
+        flat: Bool
+            Requires exactly one arg and will flatten the result int a single
+            list of values.
+
+        Returns
+        -------
+        results: List
+            List of results depending on the parameters described above
+
+        """
+        if flat and len(args) != 1:
+            raise ValueError(
+                "Values with flat=True can only have one param")
+        if args:
+            model = self.proxy.model
+            columns = []
+            for col in args:
+                if isinstance(col, str):
+                    col = resolve_member_column(model, col)
+                columns.append(col)
+            q = self.query('select', *columns)
+        else:
+            q = self.query('select')
+        if distinct:
+            q = q.distinct()
+        cursor = await self.proxy.fetchall(q, connection=self.connection)
+        if flat:
+            arg = args[0]
+            return [row[arg] for row in cursor]
+        return [dict(row) for row in cursor]
+
+    async def count(self, *args, **kwargs):
+        if args or kwargs:
+            return await self.filter(*args, **kwargs).count()
         subq = self.query('select').alias('subquery')
         q = sa.func.count().select().select_from(subq)
         return await self.proxy.scalar(q)
 
-    async def exists(self, **kwargs):
-        if kwargs:
-            return await self.filter(**kwargs).exists()
+    async def exists(self, *args, **kwargs):
+        if args or kwargs:
+            return await self.filter(*args, **kwargs).exists()
         q = sa.exists(self.query('select')).select()
         return await self.proxy.scalar(q, connection=self.connection)
 
-    async def delete(self, **kwargs):
-        if kwargs:
-            return await self.filter(**kwargs).delete()
+    async def delete(self, *args, **kwargs):
+        if args or kwargs:
+            return await self.filter(*args, **kwargs).delete()
         q = self.query('delete')
         return await self.proxy.execute(q, connection=self.connection)
 
@@ -908,34 +939,21 @@ class SQLQuerySet(Atom):
         yield from f
         return f.result()
 
-    async def all(self, **kwargs):
-        if kwargs:
-            return await self.filter(**kwargs).all()
+    async def all(self, *args, **kwargs):
+        if args or kwargs:
+            return await self.filter(*args, **kwargs).all()
         q = self.query('select')
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
         return [await restore(row) for row in cursor]
 
-    async def get(self, **kwargs):
+    async def get(self, *args, **kwargs):
         if kwargs:
-            return await self.filter(**kwargs).get()
+            return await self.filter(*args, **kwargs).get()
         q = self.query('select')
         row = await self.proxy.fetchone(q, connection=self.connection)
         if row is not None:
             return await self.proxy.model.restore(row)
-
-    def clone(self, **kwargs):
-        state = {
-            'proxy': self.proxy,
-            'connection': self.connection,
-            'filter_clauses': self.filter_clauses,
-            'related_clauses': self.related_clauses,
-            'limit_count': self.limit_count,
-            'order_clauses': self.order_clauses,
-            'query_offset': self.query_offset,
-        }
-        state.update(kwargs)
-        return self.__class__(**state)
 
 
 class SQLBinding(Atom):
@@ -979,7 +997,8 @@ class SQLBinding(Atom):
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
 
-    def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
+    def _run_visitor(
+            self, visitorcallable, element, connection=None, **kwargs):
         kwargs["checkfirst"] = False
         node = visitorcallable(self.dialect, self, **kwargs)
         node.traverse_single(element)
@@ -993,7 +1012,7 @@ class SQLBinding(Atom):
         async with engine.acquire() as conn:
             while self.queue:
                 op, args, kwargs = self.queue.pop(0)
-                result = await conn.execute(op, args)#, kwargs)
+                result = await conn.execute(op, args)
         return result
 
 
@@ -1132,17 +1151,17 @@ class SQLModel(Model, metaclass=SQLMeta):
                     if issubclass(RelModel, SQLModel):
                         # If the related model was joined, the pk field should
                         # exist so automatically restore that as well
-                        rel_pk_field = f'{RelModel.__model__}_{RelModel.__pk__}'
+                        rel_pk_name = f'{RelModel.__model__}_{RelModel.__pk__}'
                         try:
                             rel_id = state[field_label]
                         except KeyError:
-                            rel_id = state.get(rel_pk_field)
+                            rel_id = state.get(rel_pk_name)
                         if rel_id:
                             # Lookup in cache first to avoid recursion errors
                             cache = RelModel.objects.cache
                             obj = cache.get(rel_id)
                             if obj is None:
-                                if rel_pk_field in state:
+                                if rel_pk_name in state:
                                     obj = await RelModel.restore(state)
                                 else:
                                     # Create an unloaded model
@@ -1160,8 +1179,9 @@ class SQLModel(Model, metaclass=SQLMeta):
                         M2M, this_attr, rel_attr = through_factory()
                         cleaned_state[name] = [
                             getattr(r, rel_attr)
-                                for r in await M2M.objects.filter(
-                                    **{this_attr: pk})]
+                            for r in await M2M.objects.filter(
+                                **{this_attr: pk})
+                        ]
                     else:
                         # Skip relations
                         continue
@@ -1203,10 +1223,10 @@ class SQLModel(Model, metaclass=SQLMeta):
     async def load(self, connection=None):
         """ Alias to load this object from the database """
         if self.__restored__ or self._id is None:
-            return # Already loaded or won't do anything
+            return  # Already loaded or won't do anything
         db = self.objects
         t = db.table
-        q = t.select().where(t.c[self.__pk__]==self._id)
+        q = t.select().where(t.c[self.__pk__] == self._id)
         state = await db.fetchone(q, connection=connection)
         if state is not None:
             await self.__restorestate__(state)
@@ -1251,9 +1271,9 @@ class SQLModel(Model, metaclass=SQLMeta):
                 # Don't overwrite if force inserting
                 if not self._id:
                     if hasattr(r, 'lastrowid'):
-                        self._id = r.lastrowid # MySQL
+                        self._id = r.lastrowid  # MySQL
                     else:
-                        self._id = await r.scalar() # Postgres
+                        self._id = await r.scalar()  # Postgres
 
                 # Save a ref to the object in the model cache
                 db.cache[self._id] = self
@@ -1277,4 +1297,3 @@ class SQLModel(Model, metaclass=SQLMeta):
             del db.cache[pk]
             del self._id
             return r
-

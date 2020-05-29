@@ -297,7 +297,7 @@ async def test_query_related_reverse(db):
     assert jobs == [job1]
 
     jobs = await Job.objects.filter(roles__in=[role, role2])
-    assert jobs == [job, job2]
+    assert jobs == [job, job2] or jobs == [job2, job]
 
     assert await Job.objects.filter(roles__in=[role, role2]).count() == 2
 
@@ -350,6 +350,37 @@ async def test_query_limit(db):
     # No negative limits
     with pytest.raises(ValueError):
         User.objects.filter()[0:-1]
+
+@pytest.mark.asyncio
+async def test_query_values(db):
+    await reset_tables(User)
+    # Create second user
+    users = []
+    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    await user.save()
+
+    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    await user1.save()
+
+    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    await user2.save()
+
+    vals = await User.objects.filter(active=True).values()
+    assert len(vals) == 1 and vals[0]['email'] == user.email
+
+    assert await User.objects.order_by(
+        'name').values('name', distinct=True) == [
+            {"name": "Bob"}, {"name": "Jack"}]
+
+    assert await User.objects.order_by('age').values(
+        'age', flat=True) == [20, 30, 40]
+
+    assert await User.objects.filter(active=True).values(
+        'age', flat=True) == [40]
+
+    # Cannot use flat with multiple values
+    with pytest.raises(ValueError):
+        await User.objects.values('name', 'age', flat=True)
 
 
 @pytest.mark.asyncio
