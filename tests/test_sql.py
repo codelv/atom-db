@@ -369,8 +369,7 @@ async def test_query_values(db):
     assert len(vals) == 1 and vals[0]['email'] == user.email
 
     assert await User.objects.order_by(
-        'name').values('name', distinct=True) == [
-            {"name": "Bob"}, {"name": "Jack"}]
+        'name').values('name', distinct=True) == [("Bob",), ("Jack",)]
 
     assert await User.objects.order_by('age').values(
         'age', flat=True) == [20, 30, 40]

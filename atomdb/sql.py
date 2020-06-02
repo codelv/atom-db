@@ -765,7 +765,7 @@ class SQLQuerySet(Atom):
 
         Parameters
         ----------
-        args: List[str]
+        args: List[str or column]
             Fields to order by. A "~" prefix denotes decending.
 
         Returns
@@ -778,23 +778,23 @@ class SQLQuerySet(Atom):
         related_clauses = self.related_clauses[:]
         model = self.proxy.model
         for arg in args:
-            if not arg:
-                continue
+            if isinstance(arg, str):
+                # Convert django-style to sqlalchemy ordering column
+                if arg[0] == '~':
+                    field = arg[1:]
+                    ascending = False
+                else:
+                    field = arg
+                    ascending = True
 
-            if arg[0] == '~':
-                field = arg[1:]
-                ascending = False
+                col = resolve_member_column(model, field, related_clauses)
+
+                if ascending:
+                    clause = col.asc()
+                else:
+                    clause = col.desc()
             else:
-                field = arg
-                ascending = True
-
-            col = resolve_member_column(model, field, related_clauses)
-
-            if ascending:
-                clause = col.asc()
-            else:
-                clause = col.desc()
-
+                clause = arg
             if clause not in order_clauses:
                 order_clauses.append(clause)
         return self.clone(order_clauses=order_clauses,
@@ -874,7 +874,7 @@ class SQLQuerySet(Atom):
     # -------------------------------------------------------------------------
     # Query execution API
     # -------------------------------------------------------------------------
-    async def values(self, *args, distinct=False, flat=False):
+    async def values(self, *args, distinct=False, flat=False, group_by=None):
         """ Returns the results as a list of dict instead of models.
 
         Parameters
@@ -886,6 +886,8 @@ class SQLQuerySet(Atom):
         flat: Bool
             Requires exactly one arg and will flatten the result int a single
             list of values.
+        group_by: List[str or column]
+            Optional Columns to group by
 
         Returns
         -------
@@ -906,20 +908,44 @@ class SQLQuerySet(Atom):
             q = self.query('select', *columns)
         else:
             q = self.query('select')
+        if group_by is not None:
+            q = q.group_by(group_by)
         if distinct:
             q = q.distinct()
         cursor = await self.proxy.fetchall(q, connection=self.connection)
         if flat:
-            arg = args[0]
-            return [row[arg] for row in cursor]
-        return [dict(row) for row in cursor]
+            return [row[0] for row in cursor]
+        return cursor
 
     async def count(self, *args, **kwargs):
         if args or kwargs:
             return await self.filter(*args, **kwargs).count()
         subq = self.query('select').alias('subquery')
         q = sa.func.count().select().select_from(subq)
-        return await self.proxy.scalar(q)
+        return await self.proxy.scalar(q, connection=self.connection)
+
+    def max(self, *columns):
+        return self.aggregate(*columns, func=sa.func.max)
+
+    def min(self, *columns):
+        return self.aggregate(*columns, func=sa.func.min)
+
+    def mode(self, *columns):
+        return self.aggregate(*columns, func=sa.func.mode)
+
+    def sum(self, *columns):
+        return self.aggregate(*columns, func=sa.func.sum)
+
+    def aggregate(self, *args, func=None):
+        model = self.proxy.model
+        columns = []
+        for col in args:
+            if isinstance(col, str):
+                col = resolve_member_column(model, col)
+            columns.append(func(col) if func is not None else col)
+        subq = self.query('select').alias('subquery')
+        q = sa.select(columns).select_from(subq)
+        return self.proxy.fetchone(q, connection=self.connection)
 
     async def exists(self, *args, **kwargs):
         if args or kwargs:
