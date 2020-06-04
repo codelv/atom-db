@@ -199,8 +199,9 @@ def resolve_member_column(model, field, related_clauses=None):
         raise ValueError("Invalid field %s on %s" % (field, model))
 
     # Walk the relations
-    *related_parts, field = field.split("__")
-    if related_parts:
+    if '__' in field:
+        path = field
+        *related_parts, field = field.split("__")
         clause = "__".join(related_parts)
         if related_clauses is not None and clause not in related_clauses:
             related_clauses.append(clause)
@@ -211,10 +212,10 @@ def resolve_member_column(model, field, related_clauses=None):
         for part in related_parts:
             m = rel_model.members().get(part)
             if m is None:
-                raise ValueError("Invalid field %s on %s" % (field, model))
+                raise ValueError("Invalid field %s on %s" % (path, model))
             rel_model = resolve_member_type(m)
             if rel_model is None:
-                raise ValueError("Invalid field %s on %s" % (field, model))
+                raise ValueError("Invalid field %s on %s" % (path, model))
         model = rel_model
 
     # Lookup the member
@@ -758,7 +759,7 @@ class SQLQuerySet(Atom):
         return q
 
     def select_related(self, *related):
-        return self.clone(related_clauses=self.related_clauses + related)
+        return self.clone(related_clauses=self.related_clauses + list(related))
 
     def order_by(self, *args):
         """ Order the query by the given fields.
