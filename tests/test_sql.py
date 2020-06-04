@@ -351,6 +351,32 @@ async def test_query_limit(db):
     with pytest.raises(ValueError):
         User.objects.filter()[0:-1]
 
+
+@pytest.mark.asyncio
+async def test_query_select_related(db):
+    await reset_tables(Job, JobRole)
+    # Create second user
+    job = await Job.objects.create(name=faker.job())
+    await JobRole.objects.create(job=job, name=faker.job())
+    del job
+
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+
+    # Without select related it only has the Job with it's pk
+    roles = await JobRole.objects.filter().all()
+    assert len(roles) == 1 and roles[0].job.__restored__ is False
+    del roles
+
+    # TODO: Shouldn't have to do this here...
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+
+    # With select related the job is fully loaded
+    roles = await JobRole.objects.select_related('job').filter().all()
+    assert len(roles) == 1 and roles[0].job.__restored__ is True
+
+
 @pytest.mark.asyncio
 async def test_query_values(db):
     await reset_tables(User)
