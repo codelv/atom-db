@@ -1147,7 +1147,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
             # This ideally should only be done if created
             await obj.__restorestate__(state)
-        elif force:
+        elif force or not obj.__restored__:
             await obj.__restorestate__(state)
 
         return obj
