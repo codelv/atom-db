@@ -767,7 +767,7 @@ class SQLQuerySet(Atom):
         Parameters
         ----------
         args: List[str or column]
-            Fields to order by. A "~" prefix denotes decending.
+            Fields to order by. A "-" prefix denotes decending.
 
         Returns
         -------
@@ -781,7 +781,7 @@ class SQLQuerySet(Atom):
         for arg in args:
             if isinstance(arg, str):
                 # Convert django-style to sqlalchemy ordering column
-                if arg[0] == '~':
+                if arg[0] == '-':
                     field = arg[1:]
                     ascending = False
                 else:

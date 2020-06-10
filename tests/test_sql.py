@@ -316,7 +316,7 @@ async def test_query_order_by(db):
     assert await User.objects.order_by('name').all() == users
 
     users.reverse()
-    assert await User.objects.order_by('~name').all() == users
+    assert await User.objects.order_by('-name').all() == users
 
 
 @pytest.mark.asyncio
