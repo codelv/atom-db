@@ -78,10 +78,12 @@ attribute of the class to get the name of the primary key member.
 
 ##### Table metadata
 
-Like in Django a nested `Meta` class  can be added to specify the `db_name`
-and `unique_together` constraints. If no `db_name` is specified on a Meta class,
-the table name defaults the what is set in the `__model__` member. This defaults
-to the qualname of the class, eg `myapp.SomeModel`.
+Like in Django a nested `Meta` class  can be added to specify the `db_name`,
+`unique_together`, and `constraints`.
+
+If no `db_name` is specified on a Meta class, the table name defaults the what
+is set in the `__model__` member. This defaults to the qualname of the class,
+eg `myapp.SomeModel`.
 
 
 ```python
@@ -203,6 +205,10 @@ See [sqlachemy's ColumnElement](https://docs.sqlalchemy.org/en/latest/core/sqlel
 for which queries can be used in this way.  Also the tests check that these
 actually work as intended.
 
+> Note: As of `0.4.0` you can pass sqlalchemy filters as non-keyword arguments
+directly to the filter method.
+
+
 #### Advanced / raw sqlalchemy queries
 
 For more advanced queries using joins, etc.. you must build the query with
@@ -279,6 +285,11 @@ target_metadata = manager.metadata
 ```
 
 The rest is handled by alembic.
+
+
+> Note: As of 0.4.1 the constraint naming conventions can be set using
+manager.constraints, this must be done before any tables are imported.
+
 
 
 # NoSQL support
