@@ -72,11 +72,18 @@ QUERY_OPS = {
 }
 
 # Fields supported on the django style Meta class of a model
-VALID_META_FIELDS = ('db_table', 'unique_together', 'abstract')
+VALID_META_FIELDS = ('db_table', 'unique_together', 'abstract', 'constraints')
 
-MULTI_JOIN_ERROR = "Multi-join lookups are not supported, build queries " \
-                   "manually using Model.objects.table.select()..."
-
+# Constraint naming conventions
+CONSTRAINT_NAMING_CONVENTIONS = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    # Using "ck_%(table_name)s_%(constraint_name)s" is preferred but it causes
+    # issues using Bool on mysql
+    "ck": "ck_%(table_name)s_%(column_0_N_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s"
+}
 
 log = logging.getLogger('atomdb.sql')
 
@@ -391,16 +398,31 @@ def create_table(model, metadata):
     # Add table metadata
     meta = getattr(model, 'Meta', None)
     if meta:
+        # Abstract field
         abstract = getattr(meta, 'abstract', False)
         if abstract:
             raise NotImplementedError(
                 f"Tables cannot be created for abstract models: {model}")
-        unique_together = getattr(meta, 'unique_together', [])
-        if unique_together:
+
+        # Unique constraints
+        unique_together = getattr(meta, 'unique_together', None)
+        if unique_together is not None:
+            if not isinstance(unique_together, (tuple, list)):
+                msg = "Meta unique_together must be a tuple or list"
+                return TypeError(msg)
             if isinstance(unique_together[0], str):
                 unique_together = [unique_together]
             for constraint in unique_together:
-                args.append(sa.UniqueConstraint(*constraint))
+                if isinstance(constraint, (tuple, list)):
+                    constraint = sa.UniqueConstraint(*constraint)
+                args.append(constraint)
+
+        # Check constraints
+        constraints = getattr(meta, 'constraints', None)
+        if constraints is not None:
+            if not isinstance(constraints, (tuple, list)):
+                return TypeError("Meta constraints must be a tuple or list")
+            args.extend(constraints)
 
     return sa.Table(name, metadata, *args)
 
@@ -452,6 +474,10 @@ class SQLModelManager(ModelManager):
     on a Model subclass it returns a table proxy binding.
 
     """
+
+    #: Constraint naming convenctions
+    conventions = Dict(default=CONSTRAINT_NAMING_CONVENTIONS)
+
     #: Metadata
     metadata = Instance(sa.MetaData)
 
@@ -462,7 +488,9 @@ class SQLModelManager(ModelManager):
     cache = Bool(True)
 
     def _default_metadata(self):
-        return sa.MetaData(SQLBinding(manager=self))
+        return sa.MetaData(
+            SQLBinding(manager=self),
+            naming_convention=self.conventions)
 
     def create_tables(self):
         """ Create sqlalchemy tables for all registered SQLModels
