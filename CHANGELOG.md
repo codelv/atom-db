@@ -3,6 +3,7 @@
 - Change order by to use `-` as desc instead of `~`
 - Add default constraint naming conventions https://alembic.sqlalchemy.org/en/latest/naming.html#the-importance-of-naming-constraints
 - Allow setting a `constraints` list on the Model `Meta` class
+- Fix issue with `connection` arg not working properly when filtering
 
 # 0.4.0
 

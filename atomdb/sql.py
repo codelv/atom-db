@@ -851,11 +851,13 @@ class SQLQuerySet(Atom):
         related_clauses = self.related_clauses[:]
 
         connection_kwarg = p.connection_kwarg
+        connection = self.connection
 
         # Build the filter operations
         for k, v in kwargs.items():
             # Ignore connection parameter
             if k == connection_kwarg:
+                connection = v
                 continue
             model = p.model
             op = "eq"
@@ -876,8 +878,10 @@ class SQLQuerySet(Atom):
             clause = getattr(col, QUERY_OPS[op])(v)
             filter_clauses.append(clause)
 
-        return self.clone(filter_clauses=filter_clauses,
-                          related_clauses=related_clauses)
+        return self.clone(
+            connection=connection,
+            filter_clauses=filter_clauses,
+            related_clauses=related_clauses)
 
     def __getitem__(self, key):
         if isinstance(key, slice):
@@ -1003,7 +1007,7 @@ class SQLQuerySet(Atom):
         return [await restore(row) for row in cursor]
 
     async def get(self, *args, **kwargs):
-        if kwargs:
+        if args or kwargs:
             return await self.filter(*args, **kwargs).get()
         q = self.query('select')
         row = await self.proxy.fetchone(q, connection=self.connection)
