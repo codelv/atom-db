@@ -590,7 +590,8 @@ class SQLTableProxy(Atom):
         return table.bind.wait()
 
     async def execute(self, *args, **kwargs):
-        async with self.connection() as conn:
+        connection = kwargs.pop(self.connection_kwarg, None)
+        async with self.connection(connection) as conn:
             return await conn.execute(*args, **kwargs)
 
     async def fetchall(self, query, connection=None):

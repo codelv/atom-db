@@ -504,6 +504,27 @@ async def test_transaction_commit(db):
     assert len(await Job.objects.all()) == 1
     assert len(await JobRole.objects.all()) == 3
 
+@pytest.mark.asyncio
+async def test_transaction_delete(db):
+    await reset_tables(User)
+
+    name = faker.name()
+    async with User.objects.connection() as conn:
+        trans = await conn.begin()
+        try:
+            # Must pass in the connection parameter for transactions
+            user = await User.objects.create(
+                name=name, email=faker.email(), age=20, active=True,
+                connection=conn)
+            assert user._id is not None
+            await User.objects.delete(name=name, connection=conn)
+        except:
+            await trans.rollback()
+            raise
+        else:
+            await trans.commit()
+
+    assert not await User.objects.exists(name=name)
 
 @pytest.mark.asyncio
 async def test_filters(db):
