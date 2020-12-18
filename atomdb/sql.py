@@ -264,7 +264,7 @@ def atom_member_to_sql_column(model, member, **kwargs):
         return sa.Boolean()
     elif isinstance(member, api.Int):
         return sa.Integer()
-    elif isinstance(member, api.Long):
+    elif hasattr(api, 'Long') and isinstance(member, api.Long):
         return sa.BigInteger()
     elif isinstance(member, api.Float):
         return sa.Float()
