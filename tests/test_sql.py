@@ -71,7 +71,7 @@ class Page(SQLModel):
     images = List(Instance(Image))
     related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
     rating = Float()
-    visits = Long()
+    visits = Int().tag(type=sa.BigInteger())
     date = Instance(date)
     last_updated = Instance(datetime)
     tags = List(str)
