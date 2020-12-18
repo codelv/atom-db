@@ -1,3 +1,7 @@
+# 0.5.0
+
+- Replace usage of Unicode with Str to support atom 0.6.0
+
 # 0.4.1
 
 - Change order by to use `-` as desc instead of `~`

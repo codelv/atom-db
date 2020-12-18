@@ -11,8 +11,8 @@ faker = Faker()
 
 
 class User(NoSQLModel):
-    name = Unicode()
-    email = Unicode()
+    name = Str()
+    email = Str()
     active = Bool()
     settings = Dict()
 
@@ -21,14 +21,14 @@ class User(NoSQLModel):
 
 
 class Image(NoSQLModel):
-    name = Unicode()
-    path = Unicode()
+    name = Str()
+    path = Str()
 
 
 class Page(NoSQLModel):
-    title = Unicode()
+    title = Str()
     status = Enum('preview', 'live')
-    body = Unicode()
+    body = Str()
     author = Instance(User)
     images = List(Image)
     related = List(ForwardInstance(lambda: Page))
@@ -38,7 +38,7 @@ class Comment(NoSQLModel):
     page = Instance(Page)
     author = Instance(User)
     status = Enum('pending', 'approved')
-    body = Unicode()
+    body = Str()
     reply_to = ForwardInstance(lambda: Comment)
 
 

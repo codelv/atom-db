@@ -12,7 +12,7 @@ class Dates(JSONModel):
 
 class Options(JSONModel):
     a = Bool()
-    b = Unicode()
+    b = Str()
 
 class User(JSONModel):
     options = Instance(Options)

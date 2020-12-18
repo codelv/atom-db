@@ -258,7 +258,7 @@ def atom_member_to_sql_column(model, member, **kwargs):
         return member.get_column_type(model)
     elif isinstance(member, api.Str):
         return sa.String(**kwargs)
-    elif isinstance(member, api.Unicode):
+    elif hasattr(api, 'Unicode') and isinstance(member, api.Unicode):
         return sa.Unicode(**kwargs)
     elif isinstance(member, api.Bool):
         return sa.Boolean()
