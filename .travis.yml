@@ -15,7 +15,12 @@ jobs:
     env: DATABASE_URL='postgres://postgres:@127.0.0.1:5432/test_atomdb'
   - python: "3.8"
     env: DATABASE_URL='postgres://postgres:@127.0.0.1:5432/test_atomdb'
-
+  - python: "3.6"
+    env: DATABASE_URL='sqlite://test_atomdb.sqlite'
+  - python: "3.7"
+    env: DATABASE_URL='sqlite://test_atomdb.sqlite'
+  - python: "3.8"
+    env: DATABASE_URL='sqlite://test_atomdb.sqlite'
 
 services:
   - mongodb
@@ -24,7 +29,7 @@ services:
 
 install:
   # Setup
-  - pip install -U atom motor sqlalchemy aiomysql aiopg
+  - pip install -U atom motor sqlalchemy aiomysql aiopg aiosqlite
 
   # Testing
   - pip install -U codecov pytest pytest-coverage pytest-asyncio faker

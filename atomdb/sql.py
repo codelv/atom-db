@@ -767,6 +767,8 @@ class SQLQuerySet(Atom):
             q = q.select_from(from_table)
         elif query_type == 'delete':
             q = sa.delete(from_table)
+        elif query_type == 'update':
+            q = sa.update(from_table)
         else:
             raise ValueError("Unsupported query type")
 
@@ -991,6 +993,10 @@ class SQLQuerySet(Atom):
         if args or kwargs:
             return await self.filter(*args, **kwargs).delete()
         q = self.query('delete')
+        return await self.proxy.execute(q, connection=self.connection)
+
+    async def update(self, **values):
+        q = self.query('update').values(**values)
         return await self.proxy.execute(q, connection=self.connection)
 
     def __await__(self):

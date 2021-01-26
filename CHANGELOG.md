@@ -1,3 +1,7 @@
+# 0.5.1
+
+- Add `update` method using `Model.objects.update(**values)`
+
 # 0.5.0
 
 - Replace usage of Unicode with Str to support atom 0.6.0

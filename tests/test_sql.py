@@ -578,6 +578,33 @@ async def test_filters(db):
 
 
 @pytest.mark.asyncio
+async def test_update(db):
+    await reset_tables(User)
+    # Create second user
+    users = []
+    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    await user.save()
+
+    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    await user1.save()
+
+    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    await user2.save()
+
+    assert await User.objects.filter(age=20).exists()
+    r = await User.objects.filter(age=20).update(age=25)
+    assert not await User.objects.filter(age=20).exists()
+
+    assert await User.objects.filter(active=False).exists()
+    r = await User.objects.update(active=True)
+    assert not await User.objects.filter(active=False).exists()
+
+    assert await User.objects.filter(active=False).count() == 0
+    r = await User.objects.filter(name="Bob").update(active=False)
+    assert await User.objects.filter(active=False).count() == 2
+
+
+@pytest.mark.asyncio
 async def test_column_rename(db):
     """ Columns can be tagged with custom names. Verify that it works.
 

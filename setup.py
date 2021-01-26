@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='atom-db',
-    version='0.5.0',
+    version='0.5.1',
     author='CodeLV',
     author_email='frmdstryr@gmail.com',
     url='https://github.com/codelv/atom-db',
@@ -24,7 +24,7 @@ setup(
     requires=['atom'],
     install_requires=['atom'],
     optional_requires=[
-        'sqlalchemy', 'aiomysql', 'aiopg',  # sql database support
+        'sqlalchemy', 'aiomysql', 'aiopg',  'aiosqlite', # sql database support
         'motor', 'txmongo'  # nosql database support
     ],
     packages=find_packages(),
