@@ -132,9 +132,17 @@ async def reset_tables(*models):
 
 @pytest.fixture
 async def db(event_loop):
-    m = re.match(r'(.+)://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
-    assert m, "DATABASE_URL is an invalid format"
-    schema, user, pwd, host, port, db = m.groups()
+
+    if DATABASE_URL.startswith("sqlite"):
+        m = re.match(r'(.+)://(.+)', DATABASE_URL)
+        assert m, "DATABASE_URL is an invalid format"
+        schema, db = m.groups()
+        params = dict(database=db)
+    else:
+        m = re.match(r'(.+)://(.+):(.*)@(.+):(\d+)/(.+)', DATABASE_URL)
+        assert m, "DATABASE_URL is an invalid format"
+        schema, user, pwd, host, port, db = m.groups()
+        params = dict(host=host, port=int(port), user=user, password=pwd)
 
     if schema == 'mysql':
         from aiomysql.sa import create_engine
@@ -142,21 +150,28 @@ async def db(event_loop):
     elif schema == 'postgres':
         from aiopg.sa import create_engine
         from aiopg import connect
+    elif schema == 'sqlite':
+        from aiosqlite import connect
+        create_engine = connect
     else:
         raise ValueError("Unsupported database schema: %s" % schema)
 
-    params = dict(
-        host=host, port=int(port), user=user, password=pwd, loop=event_loop)
 
     if schema == 'mysql':
         params['autocommit'] = True
 
-    # Create the DB
-    async with connect(**params) as conn:
-        async with conn.cursor() as c:
-            # WARNING: Not safe
-            await c.execute('DROP DATABASE IF EXISTS %s;' % db)
-            await c.execute('CREATE DATABASE %s;' % db)
+
+    params['loop'] = event_loop
+
+    if schema == 'sqlite':
+        if os.path.exists(db):
+            os.remove(db)
+    else:
+        async with connect(**params) as conn:
+            async with conn.cursor() as c:
+                # WARNING: Not safe
+                await c.execute('DROP DATABASE IF EXISTS %s;' % db)
+                await c.execute('CREATE DATABASE %s;' % db)
 
     if schema == 'mysql':
         params['db'] = db
