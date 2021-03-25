@@ -1,3 +1,8 @@
+# 0.5.2
+
+- Add support for table database `triggers`. See https://docs.sqlalchemy.org/en/14/core/ddl.html
+- Fix bug in create_table where errors are not raised
+
 # 0.5.1
 
 - Add `update` method using `Model.objects.update(**values)`

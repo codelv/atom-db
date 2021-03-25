@@ -72,7 +72,9 @@ QUERY_OPS = {
 }
 
 # Fields supported on the django style Meta class of a model
-VALID_META_FIELDS = ('db_table', 'unique_together', 'abstract', 'constraints')
+VALID_META_FIELDS = (
+    'db_table', 'unique_together', 'abstract', 'constraints', 'triggers'
+)
 
 # Constraint naming conventions
 CONSTRAINT_NAMING_CONVENTIONS = {
@@ -408,8 +410,7 @@ def create_table(model, metadata):
         unique_together = getattr(meta, 'unique_together', None)
         if unique_together is not None:
             if not isinstance(unique_together, (tuple, list)):
-                msg = "Meta unique_together must be a tuple or list"
-                return TypeError(msg)
+                raise TypeError("Meta unique_together must be a tuple or list")
             if isinstance(unique_together[0], str):
                 unique_together = [unique_together]
             for constraint in unique_together:
@@ -421,10 +422,26 @@ def create_table(model, metadata):
         constraints = getattr(meta, 'constraints', None)
         if constraints is not None:
             if not isinstance(constraints, (tuple, list)):
-                return TypeError("Meta constraints must be a tuple or list")
+                raise TypeError("Meta constraints must be a tuple or list")
             args.extend(constraints)
 
-    return sa.Table(name, metadata, *args)
+    # Create table
+    table = sa.Table(name, metadata, *args)
+
+    # Hook up any database triggers defined
+    triggers = getattr(meta, 'triggers', None)
+    if triggers is not None:
+        if isinstance(triggers, dict):
+            triggers = list(triggers.items())
+        elif not isinstance(triggers, (tuple, list)):
+            raise TypeError("Meta triggers must be a dict, tuple, or list")
+        for event, trigger in triggers:
+            # Allow triggers to be a lambda that generates one
+            if not isinstance(trigger, sa.schema.DDL) and callable(trigger):
+                trigger = trigger()
+            sa.event.listen(table, event, trigger)
+
+    return table
 
 
 class SQLModelSerializer(ModelSerializer):
