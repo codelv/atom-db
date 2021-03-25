@@ -60,7 +60,7 @@ class JobRole(SQLModel):
 
     trigger = sa.schema.DDL('''
         CREATE CONSTRAINT TRIGGER check_default_role AFTER INSERT OR UPDATE
-        OF "default" on ON test_sql.JobRole
+        OF "default" ON test_sql.JobRole
         FOR EACH ROW EXECUTE FUNCTION check_one_default();''')
 
     class Meta:
