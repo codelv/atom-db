@@ -28,7 +28,8 @@ services:
 
 install:
   # Setup
-  - pip install -U atom motor sqlalchemy aiomysql aiopg
+  - pip install -U atom motor aiomysql aiopg
+  - pip install -U 'sqlalchemy<1.4'
 
   # Testing
   - pip install -U codecov pytest pytest-coverage pytest-asyncio faker

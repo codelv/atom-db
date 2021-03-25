@@ -1047,7 +1047,6 @@ class SQLBinding(Atom):
     queue = ContainerList()
 
     engine = property(lambda s: s)
-    schema_for_object = schema._schema_getter(None)
 
     @property
     def name(self):
@@ -1056,6 +1055,9 @@ class SQLBinding(Atom):
     @property
     def dialect(self):
         return self.manager.database.dialect
+
+    def schema_for_object(self, obj):
+        return obj.schema
 
     def contextual_connect(self, **kwargs):
         return self
@@ -1079,6 +1081,11 @@ class SQLBinding(Atom):
         kwargs["checkfirst"] = False
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
+
+    def _run_ddl_visitor(
+            self, visitorcallable, element, connection=None, **kwargs):
+        kwargs["checkfirst"] = False
+        visitorcallable(self.dialect, self, **kwargs).traverse_single(element)
 
     def _run_visitor(
             self, visitorcallable, element, connection=None, **kwargs):
