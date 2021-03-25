@@ -46,7 +46,7 @@ class JobRole(SQLModel):
     job = Instance(Job)
 
     check_one_default = sa.schema.DDL('''
-        CREATE OR REPLACE FUNCTION check_one_default() RETURNS TRIGGER
+        CREATE OR REPLACE PROCEDURE check_one_default() RETURNS TRIGGER
         LANGUAGE plpgsql
         AS $$
         BEGIN
@@ -61,7 +61,7 @@ class JobRole(SQLModel):
     trigger = sa.schema.DDL('''
         CREATE CONSTRAINT TRIGGER check_default_role AFTER INSERT OR UPDATE
         OF "default" ON test_sql.JobRole
-        FOR EACH ROW EXECUTE FUNCTION check_one_default();''')
+        FOR EACH ROW EXECUTE PROCEDURE check_one_default();''')
 
     class Meta:
         triggers = {
