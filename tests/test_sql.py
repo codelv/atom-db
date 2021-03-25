@@ -46,28 +46,31 @@ class JobRole(SQLModel):
     job = Instance(Job)
 
     check_one_default = sa.schema.DDL('''
-        CREATE OR REPLACE PROCEDURE check_one_default() RETURNS TRIGGER
+        CREATE OR REPLACE FUNCTION check_one_default() RETURNS TRIGGER
         LANGUAGE plpgsql
         AS $$
         BEGIN
-            IF EXISTS (SELECT * from test_sql.JobRole
-                       WHERE "default" == true AND "job" == NEW."job") THEN
+            IF EXISTS (SELECT * from "test_sql.JobRole"
+                       WHERE "default" = true AND "job" = NEW."job") THEN
                 RAISE EXCEPTION 'A default aleady exists';
             END IF;
-            RETURN ENW;
+            RETURN NEW;
         END;
         $$;''')
 
     trigger = sa.schema.DDL('''
         CREATE CONSTRAINT TRIGGER check_default_role AFTER INSERT OR UPDATE
-        OF "default" ON test_sql.JobRole
+        OF "default" ON "test_sql.JobRole"
         FOR EACH ROW EXECUTE PROCEDURE check_one_default();''')
 
     class Meta:
-        triggers = {
-            'after_create':
-                lambda: JobRole.trigger.execute_if(dialect='postgresql')
-        }
+        triggers = [
+            ('after_create',
+                lambda: JobRole.check_one_default.execute_if(
+                    dialect='postgresql')),
+            ('after_create',
+                lambda: JobRole.trigger.execute_if(dialect='postgresql')),
+        ]
 
 
 
