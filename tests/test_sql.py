@@ -7,14 +7,15 @@ import atomdb.sql
 import sqlalchemy as sa
 from atom.api import *
 from atomdb.sql import JSONModel, SQLModel, SQLModelManager, Relation
-from datetime import datetime, date, time
+from decimal import Decimal
+from datetime import datetime, date, time, timedelta
 from faker import Faker
 from pprint import pprint
 
 faker = Faker()
 
 if 'DATABASE_URL' not in os.environ:
-    os.environ['DATABASE_URL'] = 'mysql://mysql:mysql@127.0.0.1:3306/test_atomdb'
+    os.environ['DATABASE_URL'] = 'postgres://postgres:postgres@127.0.0.1:5432/test_atomdb'
 
 DATABASE_URL = os.environ['DATABASE_URL']
 
@@ -38,6 +39,7 @@ class User(SQLModel):
 class Job(SQLModel):
     name = Str().tag(length=64, unique=True)
     roles = Relation(lambda: JobRole)
+    duration = Instance(timedelta)
 
 
 class JobRole(SQLModel):
@@ -104,6 +106,7 @@ class Page(SQLModel):
     date = Instance(date)
     last_updated = Instance(datetime)
     tags = List(str)
+    rating = Instance(Decimal)
 
     # A bit verbose but provides a custom column specification
     data = Instance(object).tag(column=sa.Column('data', sa.LargeBinary()))

@@ -15,6 +15,7 @@ import datetime
 import weakref
 import asyncio
 import sqlalchemy as sa
+from decimal import Decimal
 from atom import api
 from atom.atom import AtomMeta
 from atom.api import (
@@ -159,8 +160,12 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
         return sa.Date(**kwargs)
     elif issubclass(cls, datetime.time):
         return sa.Time(**kwargs)
+    elif issubclass(cls, datetime.timedelta):
+        return sa.Interval(**kwargs)
     elif issubclass(cls, (bytes, bytearray)):
         return sa.LargeBinary(**kwargs)
+    elif issubclass(cls, Decimal):
+        return sa.Numeric(**kwargs)
     raise NotImplementedError(
         f"A type for {member.name} of {model} ({cls}) could not be "
         f"determined automatically, please specify it manually by tagging it "
@@ -183,8 +188,7 @@ def resolve_member_type(member):
     """
     if hasattr(member, 'resolve'):
         return member.resolve()
-    else:
-        return member.validate_mode[-1]
+    return member.validate_mode[-1]
 
 
 def resolve_member_column(model, field, related_clauses=None):

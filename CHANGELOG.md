@@ -1,3 +1,7 @@
+# 0.5.3
+
+- Add field types for `Decimal` and `timedelta`
+
 # 0.5.2
 
 - Add support for table database `triggers`. See https://docs.sqlalchemy.org/en/14/core/ddl.html
