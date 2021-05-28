@@ -98,8 +98,9 @@ class Page(SQLModel):
     status = Enum('preview', 'live')
     body = Str().tag(type=sa.UnicodeText())
     author = Instance(User)
-    images = List(Instance(Image))
-    related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
+    if DATABASE_URL.startswith('postgres'):
+        images = List(Instance(Image))
+        related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
     rating = Float()
     visits = Int().tag(type=sa.BigInteger())
     date = Instance(date)
