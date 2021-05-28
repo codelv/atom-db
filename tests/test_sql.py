@@ -101,11 +101,12 @@ class Page(SQLModel):
     if DATABASE_URL.startswith('postgres'):
         images = List(Instance(Image))
         related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
+        tags = List(str)
+
     rating = Float()
     visits = Int().tag(type=sa.BigInteger())
     date = Instance(date)
     last_updated = Instance(datetime)
-    tags = List(str)
     rating = Instance(Decimal)
 
     # A bit verbose but provides a custom column specification
