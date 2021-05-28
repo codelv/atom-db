@@ -25,13 +25,21 @@ else:
     from psycopg2.errors import UniqueViolation as IntegrityError
 
 
-class User(SQLModel):
+
+
+class AbstractUser(SQLModel):
+    email = Str().tag(length=64)
+    hashed_password = Bytes()
+
+    class Meta:
+        abstract = True
+
+
+class User(AbstractUser):
     id = Typed(int).tag(primary_key=True)
     name = Str().tag(length=200)
-    email = Str().tag(length=64)
     active = Bool()
     age = Int()
-    hashed_password = Bytes()
     settings = Dict()
     rating = Instance(float).tag(nullable=True)
 
@@ -93,6 +101,13 @@ class Image(SQLModel):
     info = Instance(ImageInfo, ())
 
 
+class BigInt(Int):
+    """ Custom member which defines the sa column type using get_column method
+    """
+    def get_column(self, model):
+        return sa.Column(self.name, sa.BigInteger())
+
+
 class Page(SQLModel):
     title = Str().tag(length=60)
     status = Enum('preview', 'live')
@@ -104,7 +119,7 @@ class Page(SQLModel):
         tags = List(str)
 
     rating = Float()
-    visits = Int().tag(type=sa.BigInteger())
+    visits = BigInt()
     date = Instance(date)
     last_updated = Instance(datetime)
     rating = Instance(Decimal)
@@ -234,6 +249,7 @@ async def test_simple_save_restore_delete(db):
 
     # Save
     user = User(name=faker.name(), email=faker.email(), active=True)
+    await user.delete()  # Deleting unsaved item does nothing
     await user.save()
     assert user._id is not None
 
