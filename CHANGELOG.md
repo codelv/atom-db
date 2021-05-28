@@ -1,6 +1,11 @@
 # 0.5.3
 
 - Add field types for `Decimal` and `timedelta`
+- Fix bug with enum field name on postgres
+- Fix array field with instance child types
+- Add support for `update_fields` on save to only fields specified
+- Add support for `fields` on load to only load fields specified
+
 
 # 0.5.2
 

@@ -75,7 +75,6 @@ class JobRole(SQLModel):
         ]
 
 
-
 class ImageInfo(JSONModel):
     depth = Int()
 
@@ -157,7 +156,7 @@ async def reset_tables(*models):
             await Model.objects.drop_table()
         except Exception as e:
             msg = str(e)
-            if not any(['Unknown table' in msg, 'does not exist' in msg]):
+            if not ('Unknown table' in msg or 'does not exist' in msg):
                 raise  # Unexpected error
         await Model.objects.create_table()
 
@@ -188,10 +187,8 @@ async def db(event_loop):
     else:
         raise ValueError("Unsupported database schema: %s" % schema)
 
-
     if schema == 'mysql':
         params['autocommit'] = True
-
 
     params['loop'] = event_loop
 
@@ -732,6 +729,67 @@ async def test_query_many_to_one(db):
             used.add(role.job)
         await role.job.load()
         assert role.job.__restored__ is True
+
+
+@pytest.mark.asyncio
+async def test_save_update_fields(db):
+    """ Test that using save with update_fields only updates the fields
+    specified
+
+    """
+    await reset_tables(User)
+    await reset_tables(Page)
+
+    page = await Page.objects.create(
+        title="Test", body="This is only a test", status="live")
+    assert page.visits == 0
+    page.visits += 1
+    page.body = "New body"
+    await page.save(update_fields=['visits'])
+
+    del Page.objects.cache[page._id]
+    page = await Page.objects.get(title="Test")
+
+    # This field should not be saved
+    assert page.body == "This is only a test"
+    # But this should be saved
+    assert page.visits == 1
+
+
+@pytest.mark.asyncio
+async def test_load_fields(db):
+    """ Test that using load with fields only loads the given field
+
+    """
+    await reset_tables(User)
+    await reset_tables(Page)
+
+    page = await Page.objects.create(
+        title="Test", body="This is only a test", status="live")
+    assert page.visits == 0
+
+    # Update outside the orm
+    t = Page.objects.table
+    q = t.update().where(t.c._id == page._id).values(
+        visits=1288821, title="New title")
+    async with Page.objects.connection() as conn:
+        await conn.execute(q)
+
+    page.body = "This has changed"
+
+    # Reload the visits
+    await page.load(fields=['visits'])
+
+    # This should be the only field that updates
+    assert page.visits == 1288821
+
+    # This should not change
+    assert page.title == "Test"
+    assert page.body == "This has changed"
+
+    # Reload the title
+    await page.load(fields=['title', 'visits'])
+    assert page.title == "New title"
 
 
 @pytest.mark.asyncio

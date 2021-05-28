@@ -281,7 +281,7 @@ def atom_member_to_sql_column(model, member, **kwargs):
         # TODO: Add min / max
         return sa.Float()
     elif isinstance(member, api.Enum):
-        return sa.Enum(*member.items)
+        return sa.Enum(*member.items, name=member.name)
     elif isinstance(member, api.IntEnum):
         return sa.SmallInteger()
     elif isinstance(member, FK_TYPES):
@@ -311,8 +311,10 @@ def atom_member_to_sql_column(model, member, **kwargs):
             raise TypeError("List and Tuple members must specify types")
         if issubclass(value_type, JSONModel):
             return sa.JSON(**kwargs)
-        return sa.ARRAY(py_type_to_sql_column(
-            model, member, value_type, **kwargs))
+        t = py_type_to_sql_column(model, member, value_type, **kwargs)
+        if isinstance(t, tuple):
+            t = t[0]  # Use only the value type
+        return sa.ARRAY(t)
     elif isinstance(member, api.Bytes):
         return sa.LargeBinary(**kwargs)
     elif isinstance(member, api.Dict):
@@ -1104,9 +1106,12 @@ class SQLBinding(Atom):
         engine = self.manager.database
         result = None
         async with engine.acquire() as conn:
-            while self.queue:
-                op, args, kwargs = self.queue.pop(0)
-                result = await conn.execute(op, args)
+            try:
+                while self.queue:
+                    op, args, kwargs = self.queue.pop(0)
+                    result = await conn.execute(op, args)
+            finally:
+                self.queue = []  # Wipe queue on error
         return result
 
 
@@ -1170,6 +1175,24 @@ class SQLMeta(ModelMeta):
                 cls.Meta = Meta
             elif getattr(Meta, 'abstract', None) is None:
                 Meta.abstract = False
+
+        # Create a set of fields to remove from state before saving to the db
+        # this removes Relation instances and several needed for json
+        excluded_fields = cls.__excluded_fields__ = {
+            '__model__', '__ref__', '_id'
+        }
+
+        for name, member in cls.members().items():
+            if isinstance(member, Relation):
+                excluded_fields.add(name)
+
+        # Cache the mapping of any renamed fields
+        renamed_fields = cls.__renamed_fields__ = {}
+        for old_name, member in cls.members().items():
+            if member.metadata:
+                new_name = member.metadata.get('name')
+                if new_name is not None:
+                    renamed_fields[old_name] = new_name
 
         return cls
 
@@ -1314,40 +1337,85 @@ class SQLModel(Model, metaclass=SQLMeta):
                 cleaned_state[name] = v
         await super().__restorestate__(cleaned_state, scope)
 
-    async def load(self, connection=None):
-        """ Alias to load this object from the database """
-        if self.__restored__ or self._id is None:
+    async def load(self, connection=None, reload=False, fields=None):
+        """ Alias to load this object from the database
+
+        Parameters
+        ----------
+        connection: Connection
+            The connection instance to use in a transaction
+        reload: Bool
+            If True force reloading the state even if the state has
+            already been loaded.
+        fields: Iterable[str]
+            Optional list of field names to load. Use this to refresh
+            specific fields from the database.
+
+        """
+        skip = self.__restored__ and not reload and not fields
+        if skip or self._id is None:
             return  # Already loaded or won't do anything
         db = self.objects
         t = db.table
-        q = t.select().where(t.c[self.__pk__] == self._id)
+        if fields is not None:
+            renamed = self.__renamed_fields__
+            columns = (t.c[renamed.get(f, f)] for f in fields)
+            q = sa.select(columns).select_from(t)
+        else:
+            q = t.select()
+        q = q.where(t.c[self.__pk__] == self._id)
         state = await db.fetchone(q, connection=connection)
-        if state is not None:
-            await self.__restorestate__(state)
+        await self.__restorestate__(state)
 
     async def save(self, force_insert=False, force_update=False,
-                   connection=None):
-        """ Alias to save this object to the database """
+                   update_fields=None, connection=None):
+        """ Alias to save this object to the database
+
+        Parameters
+        ----------
+        force_insert: Bool
+            Ensure that save performs an insert
+        force_update: Bool
+            Ensure that save performs an update
+        update_fields: Iterable[str]
+            If given, only update the given fields
+        connection: Connection
+            The connection instance to use in a transaction
+
+        Returns
+        -------
+        result: Value
+            Update or save result
+
+        """
         if force_insert and force_update:
             raise ValueError(
                 'Cannot use force_insert and force_update together')
 
         db = self.objects
         state = self.__getstate__()
-        state.pop('__model__', None)
-        state.pop('__ref__', None)
-        state.pop('_id', None)
 
-        # If any column names were redefined use those instead
-        for name, m in self.members().items():
-            if isinstance(m, Relation):
-                state.pop(name, None)
-            elif m.metadata and 'name' in m.metadata and name in state:
-                state[m.metadata['name']] = state.pop(name)
+        # Remove any fields are in the state but should not go into the db
+        for f in self.__excluded_fields__:
+            state.pop(f, None)
+
+        # Replace any renamed fields
+        for old_name, new_name in self.__renamed_fields__.items():
+            state[new_name] = state.pop(old_name)
 
         table = db.table
         async with db.connection(connection) as conn:
             if force_update or (self._id and not force_insert):
+
+                # If update fields was given, only pass those
+                if update_fields is not None:
+                    # Replace any update fields with the appropriate name
+                    renamed = self.__renamed_fields__
+                    update_fields = (renamed.get(f, f) for f in update_fields)
+
+                    # Replace update fields with only those given
+                    state = {f: state[f] for f in update_fields}
+
                 q = table.update().where(
                         table.c[self.__pk__] == self._id).values(**state)
                 r = await conn.execute(q)
