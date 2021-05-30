@@ -23,6 +23,7 @@ from pprint import pformat
 from base64 import b64encode, b64decode
 from datetime import date, time, datetime
 from decimal import Decimal
+from uuid import UUID
 
 
 logger = logging.getLogger('atomdb')
@@ -55,6 +56,7 @@ class ModelSerializer(Atom):
         'datetime.time': lambda s: time(**s),
         'bytes': lambda s: b64decode(s['bytes']),
         'decimal': lambda s: Decimal(s['value']),
+        'uuid': lambda s: UUID(s['id']),
     })
 
     @classmethod
@@ -464,6 +466,8 @@ class JSONSerializer(ModelSerializer):
             return {'__py__': 'bytes', 'bytes': b64encode(v).decode()}
         if isinstance(v, Decimal):
             return {'__py__': 'decimal', 'value': str(v)}
+        if isinstance(v, UUID):
+            return {'__py__': 'uuid', 'id': str(v)}
         return super().flatten(v, scope)
 
     def flatten_object(self, obj, scope):

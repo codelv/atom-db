@@ -1,3 +1,8 @@
+# 0.5.5
+
+- Add builtin JSON serializer for `UUID`
+
+
 # 0.5.4
 
 - Add builtin JSON serializer for `Decimal`

@@ -1,9 +1,11 @@
+import uuid
 import pytest
 import json
 from decimal import Decimal
 from datetime import date, time, datetime
 from atomdb.base import JSONModel
 from atom.api import *
+
 
 class Dates(JSONModel):
     d = Instance(date)
@@ -15,15 +17,20 @@ class Options(JSONModel):
     a = Bool()
     b = Str()
 
+
 class User(JSONModel):
     options = Instance(Options)
 
+
 class File(JSONModel):
+    id = Instance(uuid.UUID, factory=uuid.uuid4)
     name = Str()
     data = Bytes()
 
+
 class Page(JSONModel):
     files = List(File)
+
 
 class Tree(JSONModel):
     name = Str()
@@ -32,6 +39,7 @@ class Tree(JSONModel):
 
 class Amount(JSONModel):
     total = Instance(Decimal)
+
 
 @pytest.mark.asyncio
 async def test_json_dates():
@@ -83,6 +91,7 @@ async def test_json_list():
     assert len(r.files) == 2
     assert r.files[0].name == f1.name and r.files[0].data == f1.data
     assert r.files[1].name == f2.name and r.files[1].data == f2.data
+    assert r.files[1].id == f2.id
 
 
 @pytest.mark.asyncio
