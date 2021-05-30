@@ -1,5 +1,6 @@
 import pytest
 import json
+from decimal import Decimal
 from datetime import date, time, datetime
 from atomdb.base import JSONModel
 from atom.api import *
@@ -28,6 +29,10 @@ class Tree(JSONModel):
     name = Str()
     related = ForwardInstance(lambda: Tree)
 
+
+class Amount(JSONModel):
+    total = Instance(Decimal)
+
 @pytest.mark.asyncio
 async def test_json_dates():
     now = datetime.now()
@@ -37,6 +42,16 @@ async def test_json_dates():
     data = json.dumps(state)
     r = await Dates.restore(json.loads(data))
     assert r.d == obj.d and r.t == obj.t and r.dt == r.dt
+
+
+@pytest.mark.asyncio
+async def test_json_decimal():
+    d = Decimal('3.9')
+    obj = Amount(total=d)
+    state = obj.__getstate__()
+    data = json.dumps(state)
+    r = await Amount.restore(json.loads(data))
+    assert r.total == d
 
 
 @pytest.mark.asyncio

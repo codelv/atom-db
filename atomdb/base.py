@@ -22,6 +22,7 @@ from random import getrandbits
 from pprint import pformat
 from base64 import b64encode, b64decode
 from datetime import date, time, datetime
+from decimal import Decimal
 
 
 logger = logging.getLogger('atomdb')
@@ -53,6 +54,7 @@ class ModelSerializer(Atom):
         'datetime.datetime': lambda s: datetime(**s),
         'datetime.time': lambda s: time(**s),
         'bytes': lambda s: b64decode(s['bytes']),
+        'decimal': lambda s: Decimal(s['value']),
     })
 
     @classmethod
@@ -436,14 +438,13 @@ class Model(Atom, metaclass=ModelMeta):
 class JSONSerializer(ModelSerializer):
 
     def flatten(self, v, scope=None):
-        """ Flatten date, datetime, time, and bytes as a dict with a __py__
-        field and arguments to reconstruct it.
+        """ Flatten date, datetime, time, decimal, and bytes as a dict with
+        a __py__ field and arguments to reconstruct it. Also see the coercers
 
         """
         if isinstance(v, (date, datetime, time)):
             # This is inefficient space wise but still allows queries
-            py_type = f'{v.__class__.__module__}.{v.__class__.__name__}'
-            s = {'__py__': py_type}
+            s = {'__py__': f'{v.__class__.__module__}.{v.__class__.__name__}'}
             if isinstance(v, (date, datetime)):
                 s.update({
                     'year': v.year,
@@ -460,8 +461,9 @@ class JSONSerializer(ModelSerializer):
                 })
             return s
         if isinstance(v, bytes):
-            py_type = 'bytes'
             return {'__py__': 'bytes', 'bytes': b64encode(v).decode()}
+        if isinstance(v, Decimal):
+            return {'__py__': 'decimal', 'value': str(v)}
         return super().flatten(v, scope)
 
     def flatten_object(self, obj, scope):

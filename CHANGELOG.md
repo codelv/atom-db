@@ -1,3 +1,7 @@
+# 0.5.4
+
+- Add builtin JSON serializer for `Decimal`
+
 # 0.5.3
 
 - Add field types for `Decimal` and `timedelta`

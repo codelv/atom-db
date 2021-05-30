@@ -25,8 +25,6 @@ else:
     from psycopg2.errors import UniqueViolation as IntegrityError
 
 
-
-
 class AbstractUser(SQLModel):
     email = Str().tag(length=64)
     hashed_password = Bytes()
