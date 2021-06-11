@@ -418,14 +418,15 @@ async def test_query_select_related(db):
     # Create second user
     job = await Job.objects.create(name=faker.job())
     await JobRole.objects.create(job=job, name=faker.job())
+    await JobRole.objects.create(name=faker.job())
     del job
 
     Job.objects.cache.clear()
     JobRole.objects.cache.clear()
 
     # Without select related it only has the Job with it's pk
-    roles = await JobRole.objects.filter().all()
-    assert len(roles) == 1 and roles[0].job.__restored__ is False
+    roles = await JobRole.objects.all()
+    assert len(roles) == 2 and roles[0].job.__restored__ is False
     del roles
 
     # TODO: Shouldn't have to do this here...
@@ -433,8 +434,16 @@ async def test_query_select_related(db):
     JobRole.objects.cache.clear()
 
     # With select related the job is fully loaded
-    roles = await JobRole.objects.select_related('job').filter().all()
+    # since the second role does not set a job it is excluded due to the
+    # default inner join
+    roles = await JobRole.objects.select_related('job').all()
     assert len(roles) == 1 and roles[0].job.__restored__ is True
+
+    # Using outer join includes related fields that are null
+    roles = await JobRole.objects.select_related('job', outer_join=True).all()
+    assert len(roles) == 2
+    assert roles[0].job.__restored__ is True
+    assert roles[1].job is None
 
 
 @pytest.mark.asyncio

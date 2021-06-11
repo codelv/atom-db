@@ -757,6 +757,7 @@ class SQLQuerySet(Atom):
 
     filter_clauses = List()
     related_clauses = List()
+    outer_join = Bool()
     order_clauses = List()
     limit_count = Int()
     query_offset = Int()
@@ -775,14 +776,14 @@ class SQLQuerySet(Atom):
         model = p.model
         members = model.members()
         use_labels = bool(self.related_clauses)
-
+        outer_join = self.outer_join
         for clause in self.related_clauses:
             from_table = p.table
             for part in clause.split("__"):
                 m = members.get(part)
                 rel_model = resolve_member_type(m)
                 table = rel_model.objects.table
-                from_table = sa.join(from_table, table)
+                from_table = sa.join(from_table, table, isouter=outer_join)
                 tables.append(table)
 
         if query_type == 'select':
@@ -812,8 +813,26 @@ class SQLQuerySet(Atom):
 
         return q
 
-    def select_related(self, *related):
-        return self.clone(related_clauses=self.related_clauses + list(related))
+    def select_related(self, *related, outer_join=None):
+        """ Define related fields to join in the query.
+
+        Parameters
+        ----------
+        args: List[str]
+            List of related fields to join.
+        outer_join: Bool
+            If given set whether or not a left outer join is used.
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the related field terms added.
+
+        """
+        outer_join = self.outer_join if outer_join is None else outer_join
+        return self.clone(
+            related_clauses=self.related_clauses + list(related),
+            outer_join=outer_join)
 
     def order_by(self, *args):
         """ Order the query by the given fields.

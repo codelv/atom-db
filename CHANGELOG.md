@@ -1,3 +1,7 @@
+# 0.5.6
+
+- Add `outer_join` to queryset to allow using a left outer join with select related
+
 # 0.5.5
 
 - Add builtin JSON serializer for `UUID`
