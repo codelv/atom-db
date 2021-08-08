@@ -23,6 +23,7 @@ if DATABASE_URL.startswith('mysql'):
     from pymysql.err import IntegrityError
 else:
     from psycopg2.errors import UniqueViolation as IntegrityError
+IS_MYSQL = DATABASE_URL.startswith('mysql')
 
 
 class AbstractUser(SQLModel):
@@ -55,7 +56,7 @@ class JobRole(SQLModel):
 
     check_one_default = sa.schema.DDL('''
         CREATE OR REPLACE FUNCTION check_one_default() RETURNS TRIGGER
-        LANGUAGE plpgsql
+        LANGUAGE plpgsql`
         AS $$
         BEGIN
             IF EXISTS (SELECT * from "test_sql.JobRole"
@@ -477,6 +478,7 @@ async def test_query_values(db):
         await User.objects.values('name', 'age', flat=True)
 
 
+@pytest.mark.skipif(IS_MYSQL, reason="Distinct and count doesn't work")
 @pytest.mark.asyncio
 async def test_query_distinct(db):
     await reset_tables(User)
