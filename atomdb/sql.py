@@ -759,6 +759,7 @@ class SQLQuerySet(Atom):
     related_clauses = List()
     outer_join = Bool()
     order_clauses = List()
+    distinct_clauses = List()
     limit_count = Int()
     query_offset = Int()
 
@@ -795,6 +796,9 @@ class SQLQuerySet(Atom):
             q = sa.update(from_table)
         else:
             raise ValueError("Unsupported query type")
+
+        if self.distinct_clauses:
+            q = q.distinct(*self.distinct_clauses)
 
         if self.filter_clauses:
             if len(self.filter_clauses) == 1:
@@ -874,6 +878,34 @@ class SQLQuerySet(Atom):
         return self.clone(order_clauses=order_clauses,
                           related_clauses=related_clauses)
 
+    def distinct(self, *args):
+        """ Apply distinct on the given column.
+
+        Parameters
+        ----------
+        args: List[str or column]
+            Fields that must be distinct.
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the distinct terms added.
+
+        """
+        distinct_clauses = self.distinct_clauses[:]
+        related_clauses = self.related_clauses[:]
+        model = self.proxy.model
+        for arg in args:
+            if isinstance(arg, str):
+                # Convert name to sqlalchemy column
+                clause = resolve_member_column(model, arg, related_clauses)
+            else:
+                clause = arg
+            if clause not in distinct_clauses:
+                distinct_clauses.append(clause)
+        return self.clone(distinct_clauses=distinct_clauses,
+                          related_clauses=related_clauses)
+
     def filter(self, *args, **kwargs):
         """ Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
@@ -943,10 +975,10 @@ class SQLQuerySet(Atom):
             raise ValueError("Cannot use a negative limit")
         return self.clone(limit_count=limit, query_offset=offset)
 
-    def limit(self, limit):
+    def limit(self, limit: int):
         return self.clone(limit_count=limit)
 
-    def offset(self, offset):
+    def offset(self, offset: int):
         return self.clone(query_offset=offset)
 
     # -------------------------------------------------------------------------
@@ -962,7 +994,7 @@ class SQLQuerySet(Atom):
         distinct: Bool
             Return only distinct rows
         flat: Bool
-            Requires exactly one arg and will flatten the result int a single
+            Requires exactly one arg and will flatten the result into a single
             list of values.
         group_by: List[str or column]
             Optional Columns to group by

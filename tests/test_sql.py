@@ -478,6 +478,32 @@ async def test_query_values(db):
 
 
 @pytest.mark.asyncio
+async def test_query_distinct(db):
+    await reset_tables(User)
+    # Create second user
+    users = []
+    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    await user.save()
+
+    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    await user1.save()
+
+    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    await user2.save()
+
+    num_names = await User.objects.distinct('name').count()
+    assert num_names == 2
+    distinct_names = await User.objects.distinct(
+        'name').order_by('name').values('name', flat=True)
+    assert distinct_names == ['Bob', 'Jack']
+
+    num_ages = await User.objects.distinct('age').count()
+    assert num_ages == 3
+    num_ages = await User.objects.filter(age__gt=25).distinct('age').count()
+    assert num_ages == 2
+
+
+@pytest.mark.asyncio
 async def test_get_or_create(db):
     await reset_tables(User, Job, JobRole)
 
