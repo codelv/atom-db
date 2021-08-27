@@ -17,6 +17,7 @@ import asyncio
 import sqlalchemy as sa
 from decimal import Decimal
 from functools import wraps
+from typing import Dict as DictType
 from typing import List as ListType
 from typing import Tuple as TupleType
 from typing import Callable as CallableType
@@ -41,7 +42,7 @@ from atom.api import (
 )
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
-from sqlalchemy.orm.query import Query
+from sqlalchemy.sql.type_api import TypeEngine
 from sqlalchemy import func
 from .base import (
     ModelManager,
@@ -171,7 +172,7 @@ class Relation(ContainerList):
 
 def py_type_to_sql_column(
     model: Model, member: Member, cls: Type, **kwargs
-) -> sa.TypeEngine:
+) -> TypeEngine:
     """Convert the python type to an alchemy table column type"""
     if issubclass(cls, JSONModel):
         return sa.JSON(**kwargs)
@@ -295,7 +296,7 @@ def resolve_member_column(
     return col
 
 
-def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> sa.TypeEngine:
+def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> TypeEngine:
     """Convert the atom member type to an sqlalchemy table column type
     See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
 
@@ -554,7 +555,7 @@ class SQLModelManager(ModelManager, Generic[T]):
     def _default_metadata(self) -> sa.MetaData:
         return sa.MetaData(SQLBinding(manager=self), naming_convention=self.conventions)
 
-    def create_tables(self) -> Dict[Type["SQLModel"], sa.Table]:
+    def create_tables(self) -> DictType[Type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
         tables = {}
         for cls in find_sql_models():
@@ -655,7 +656,7 @@ class SQLTableProxy(Atom, Generic[T]):
         async with self.connection(connection) as conn:
             return await conn.execute(*args, **kwargs)
 
-    async def fetchall(self, query: Union[str, sa.Query], connection=None):
+    async def fetchall(self, query: QueryType, connection=None):
         """Fetch all results for the query.
 
         Parameters
@@ -805,7 +806,7 @@ class SQLQuerySet(Atom, Generic[T]):
         state.update(kwargs)
         return self.__class__(**state)
 
-    def query(self, query_type: str = "select", *columns, **kwargs) -> sa.Expression:
+    def query(self, query_type: str = "select", *columns, **kwargs):
         if kwargs:
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
