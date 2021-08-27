@@ -16,60 +16,92 @@ import weakref
 import asyncio
 import sqlalchemy as sa
 from decimal import Decimal
+from functools import wraps
+from typing import List as ListType
+from typing import Tuple as TupleType
+from typing import Callable as CallableType
+from typing import Any, Type, Optional, Iterator, Union, Sequence, Generic, TypeVar
 from atom import api
 from atom.atom import AtomMeta
 from atom.api import (
-    Atom, Subclass, ContainerList, Int, Dict, Instance, Typed, Property, Str,
-    ForwardInstance, Value, Bool, List
+    Atom,
+    Member,
+    Subclass,
+    ContainerList,
+    Int,
+    Dict,
+    Instance,
+    Typed,
+    Property,
+    Str,
+    ForwardInstance,
+    Value,
+    Bool,
+    List,
 )
-from functools import wraps
 from sqlalchemy.engine import ddl, strategies
 from sqlalchemy.sql import schema
 from sqlalchemy.orm.query import Query
 from sqlalchemy import func
-
-
 from .base import (
-    ModelManager, ModelSerializer, Model, ModelMeta, find_subclasses,
-    JSONModel, JSONSerializer
+    ModelManager,
+    ModelSerializer,
+    Model,
+    ModelMeta,
+    find_subclasses,
+    JSONModel,
+    JSONSerializer,
+    ScopeType,
+    StateType,
 )
-
 
 # kwargs reserved for sqlalchemy table columns
 COLUMN_KWARGS = (
-    'autoincrement', 'default', 'doc', 'key', 'index', 'info', 'nullable',
-    'onupdate', 'primary_key', 'server_default', 'server_onupdate',
-    'quote', 'unique', 'system', 'comment'
+    "autoincrement",
+    "default",
+    "doc",
+    "key",
+    "index",
+    "info",
+    "nullable",
+    "onupdate",
+    "primary_key",
+    "server_default",
+    "server_onupdate",
+    "quote",
+    "unique",
+    "system",
+    "comment",
 )
 FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
 
 # ops that can be used with django-style queries
 QUERY_OPS = {
-    'eq': '__eq__',
-    'gt': '__gt__',
-    'gte': '__ge__',
-    'ge': '__ge__',
-    'lt': '__lt__',
-    'le': '__le__',
-    'lte': '__le__',
-    'all': 'all_',
-    'any': 'any_',
-    'ne': '__ne__',
-    'not': '__ne__',
-    'contains': 'contains',
-    'endswith': 'endswith',
-    'ilike': 'ilike',
-    'in': 'in_',
-    'is': 'is_',
-    'is_distinct_from': 'is_distinct_from',
-    'isnot': 'isnot',
-    'isnot_distinct_from': 'isnot_distinct_from',
-    'like': 'like',
-    'match': 'match',
-    'notilike': 'notilike',
-    'notlike': 'notlike',
-    'notin': 'notin_',
-    'startswith': 'startswith',
+    "eq": "__eq__",
+    "gt": "__gt__",
+    "gte": "__ge__",
+    "ge": "__ge__",
+    "lt": "__lt__",
+    "le": "__le__",
+    "lte": "__le__",
+    "all": "all_",
+    "any": "any_",
+    "ne": "__ne__",
+    "not": "__ne__",
+    "contains": "contains",
+    "endswith": "endswith",
+    "ilike": "ilike",
+    "in": "in_",
+    "is": "is_",
+    "is_distinct_from": "is_distinct_from",
+    "isnot": "isnot",
+    "isnot_distinct_from": "isnot_distinct_from",
+    "like": "like",
+    "match": "match",
+    "notilike": "notilike",
+    "notlike": "notlike",
+    "notin": "notin_",
+    "startswith": "startswith",
 }
 
 # Fields supported on the django style Meta class of a model
@@ -85,14 +117,17 @@ CONSTRAINT_NAMING_CONVENTIONS = {
     # issues using Bool on mysql
     "ck": "ck_%(table_name)s_%(column_0_N_name)s",
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
-    "pk": "pk_%(table_name)s"
+    "pk": "pk_%(table_name)s",
 }
 
-log = logging.getLogger('atomdb.sql')
+log = logging.getLogger("atomdb.sql")
+
+QueryType = Union[str, sa.sql.expression.Executable]
+T = TypeVar("T", bound="SQLModel")
 
 
-def find_sql_models():
-    """ Finds all non-abstract imported SQLModels by looking up subclasses
+def find_sql_models() -> Iterator["SQLModel"]:
+    """Finds all non-abstract imported SQLModels by looking up subclasses
     of the SQLModel.
 
     Yields
@@ -102,43 +137,42 @@ def find_sql_models():
     """
     for model in find_subclasses(SQLModel):
         # Get model Meta class
-        meta = getattr(model, 'Meta', None)
+        meta = getattr(model, "Meta", None)
         if meta:
             # If this is marked as abstract ignore it
-            if getattr(meta, 'abstract', False):
+            if getattr(meta, "abstract", False):
                 continue
         yield model
 
 
 class Relation(ContainerList):
-    """ A member which serves as a fk relation backref
+    """A member which serves as a fk relation backref"""
 
-    """
-    __slots__ = ('_to',)
+    __slots__ = ("_to",)
 
-    def __init__(self, item, default=None):
+    def __init__(self, item: CallableType[[], Type[Model]], default=None):
         super(Relation, self).__init__(ForwardInstance(item), default=None)
         self._to = None
 
-    def resolve(self):
+    def resolve(self) -> Member:
         return self.to
 
     @property
-    def to(self):
+    def to(self) -> Member:
         to = self._to
         if not to:
             to = self._to = resolve_member_type(self.validate_mode[-1])
         return to
 
 
-def py_type_to_sql_column(model, member, cls, **kwargs):
-    """ Convert the python type to an alchemy table column type
-
-    """
+def py_type_to_sql_column(
+    model: Model, member: Member, cls: Type, **kwargs
+) -> sa.TypeEngine:
+    """Convert the python type to an alchemy table column type"""
     if issubclass(cls, JSONModel):
         return sa.JSON(**kwargs)
     elif issubclass(cls, Model):
-        name = f'{cls.__model__}.{cls.__pk__}'
+        name = f"{cls.__model__}.{cls.__pk__}"
         cls.__backrefs__.add((model, member))
 
         # Determine the type of the foreign key
@@ -169,11 +203,12 @@ def py_type_to_sql_column(model, member, cls, **kwargs):
     raise NotImplementedError(
         f"A type for {member.name} of {model} ({cls}) could not be "
         f"determined automatically, please specify it manually by tagging it "
-        f"with .tag(column=<sqlalchemy column>) or set `store=False`")
+        f"with .tag(column=<sqlalchemy column>) or set `store=False`"
+    )
 
 
-def resolve_member_type(member):
-    """ Determine the type specified on a member to determine ForeignKey
+def resolve_member_type(member: Member) -> Any:
+    """Determine the type specified on a member to determine ForeignKey
     relations.
 
     Parameters
@@ -186,13 +221,15 @@ def resolve_member_type(member):
         The type specified.
 
     """
-    if hasattr(member, 'resolve'):
+    if hasattr(member, "resolve"):
         return member.resolve()
     return member.validate_mode[-1]
 
 
-def resolve_member_column(model, field, related_clauses=None):
-    """ Get the sqlalchemy column for the given model and field.
+def resolve_member_column(
+    model: Model, field: str, related_clauses: Optional[ListType[str]] = None
+) -> sa.Column:
+    """Get the sqlalchemy column for the given model and field.
 
     Parameters
     ----------
@@ -203,7 +240,7 @@ def resolve_member_column(model, field, related_clauses=None):
 
     Returns
     -------
-    result: Tuple[Table, Column]
+    result: sa.Column
         A tuple containing the through table (or None) and the
         sqlalchemy column.
 
@@ -212,7 +249,7 @@ def resolve_member_column(model, field, related_clauses=None):
         raise ValueError("Invalid field %s on %s" % (field, model))
 
     # Walk the relations
-    if '__' in field:
+    if "__" in field:
         path = field
         *related_parts, field = field.split("__")
         clause = "__".join(related_parts)
@@ -236,7 +273,7 @@ def resolve_member_column(model, field, related_clauses=None):
     if m is not None:
         if m.metadata:
             # If the field has a different name assigned use that
-            field = m.metadata.get('name', field)
+            field = m.metadata.get("name", field)
         if isinstance(m, Relation):
             # Support looking up columns through a relation by the pk
             model = m.to
@@ -254,23 +291,23 @@ def resolve_member_column(model, field, related_clauses=None):
     return col
 
 
-def atom_member_to_sql_column(model, member, **kwargs):
-    """ Convert the atom member type to an sqlalchemy table column type
+def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> sa.TypeEngine:
+    """Convert the atom member type to an sqlalchemy table column type
     See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
 
     """
-    if hasattr(member, 'get_column_type'):
+    if hasattr(member, "get_column_type"):
         # Allow custom members to define the column type programatically
         return member.get_column_type(model)
     elif isinstance(member, api.Str):
         return sa.String(**kwargs)
-    elif hasattr(api, 'Unicode') and isinstance(member, api.Unicode):
+    elif hasattr(api, "Unicode") and isinstance(member, api.Unicode):
         return sa.Unicode(**kwargs)
     elif isinstance(member, api.Bool):
         return sa.Boolean()
     elif isinstance(member, api.Int):
         return sa.Integer()
-    elif hasattr(api, 'Long') and isinstance(member, api.Long):
+    elif hasattr(api, "Long") and isinstance(member, api.Long):
         return sa.BigInteger()
     elif isinstance(member, api.Float):
         return sa.Float()
@@ -282,7 +319,7 @@ def atom_member_to_sql_column(model, member, **kwargs):
         return sa.Float()
     elif isinstance(member, api.Enum):
         return sa.Enum(*member.items, name=member.name)
-    elif isinstance(member, api.IntEnum):
+    elif hasattr(api, "IntEnum") and isinstance(member, api.IntEnum):
         return sa.SmallInteger()
     elif isinstance(member, FK_TYPES):
         value_type = resolve_member_type(member)
@@ -322,11 +359,12 @@ def atom_member_to_sql_column(model, member, **kwargs):
     raise NotImplementedError(
         f"A column for {member.name} of {model} could not be determined "
         f"automatically, please specify it manually by tagging it "
-        f"with .tag(column=<sqlalchemy column>)")
+        f"with .tag(column=<sqlalchemy column>)"
+    )
 
 
-def create_table_column(model, member):
-    """ Converts an Atom member into a sqlalchemy data type.
+def create_table_column(model: Model, member: Member) -> sa.Column:
+    """Converts an Atom member into a sqlalchemy data type.
 
     Parameters
     ----------
@@ -345,7 +383,7 @@ def create_table_column(model, member):
     1. https://docs.sqlalchemy.org/en/latest/core/types.html
 
     """
-    if hasattr(member, 'get_column'):
+    if hasattr(member, "get_column"):
         # Allow custom members to define the column programatically
         return member.get_column(model)
 
@@ -353,12 +391,12 @@ def create_table_column(model, member):
     metadata = member.metadata.copy() if member.metadata else {}
 
     # If a column is specified use that
-    if 'column' in metadata:
-        return metadata['column']
+    if "column" in metadata:
+        return metadata["column"]
 
-    metadata.pop('store', None)
-    column_name = metadata.pop('name', member.name)
-    column_type = metadata.pop('type', None)
+    metadata.pop("store", None)
+    column_name = metadata.pop("name", member.name)
+    column_type = metadata.pop("type", None)
 
     # Extract column kwargs from member metadata
     kwargs = {}
@@ -379,8 +417,8 @@ def create_table_column(model, member):
     return sa.Column(column_name, *args, **kwargs)
 
 
-def create_table(model, metadata):
-    """ Create an sqlalchemy table by inspecting the Model and generating
+def create_table(model: "SQLModel", metadata: sa.MetaData) -> sa.Table:
+    """Create an sqlalchemy table by inspecting the Model and generating
     a column for each member.
 
     Parameters
@@ -404,16 +442,17 @@ def create_table(model, metadata):
             args.append(column)
 
     # Add table metadata
-    meta = getattr(model, 'Meta', None)
+    meta = getattr(model, "Meta", None)
     if meta:
         # Abstract field
-        abstract = getattr(meta, 'abstract', False)
+        abstract = getattr(meta, "abstract", False)
         if abstract:
             raise NotImplementedError(
-                f"Tables cannot be created for abstract models: {model}")
+                f"Tables cannot be created for abstract models: {model}"
+            )
 
         # Unique constraints
-        unique_together = getattr(meta, 'unique_together', None)
+        unique_together = getattr(meta, "unique_together", None)
         if unique_together is not None:
             if not isinstance(unique_together, (tuple, list)):
                 raise TypeError("Meta unique_together must be a tuple or list")
@@ -425,7 +464,7 @@ def create_table(model, metadata):
                 args.append(constraint)
 
         # Check constraints
-        constraints = getattr(meta, 'constraints', None)
+        constraints = getattr(meta, "constraints", None)
         if constraints is not None:
             if not isinstance(constraints, (tuple, list)):
                 raise TypeError("Meta constraints must be a tuple or list")
@@ -445,7 +484,7 @@ def create_table(model, metadata):
     table = sa.Table(name, metadata, *args)
 
     # Hook up any database triggers defined
-    triggers = getattr(meta, 'triggers', None)
+    triggers = getattr(meta, "triggers", None)
     if triggers is not None:
         if isinstance(triggers, dict):
             triggers = list(triggers.items())
@@ -461,11 +500,10 @@ def create_table(model, metadata):
 
 
 class SQLModelSerializer(ModelSerializer):
-    """ Uses sqlalchemy to lookup the model.
+    """Uses sqlalchemy to lookup the model."""
 
-    """
-    def flatten_object(self, obj, scope):
-        """ Serialize a model for entering into the database
+    def flatten_object(self, obj: Model, scope: ScopeType) -> Any:
+        """Serialize a model for entering into the database
 
         Parameters
         ----------
@@ -483,26 +521,25 @@ class SQLModelSerializer(ModelSerializer):
         return obj._id
 
     async def get_object_state(self, obj, state, scope):
-        """ Load the object state if needed. Since the __model__ is not saved
+        """Load the object state if needed. Since the __model__ is not saved
         to the db tables with SQL we know that if it's "probably" there
         because a query was used.
         """
         ModelType = obj.__class__
-        if '__model__' in state:
+        if "__model__" in state:
             return state  # Joined already
-        q = ModelType.objects.query(None, _id=state['_id'])
+        q = ModelType.objects.query(None, _id=state["_id"])
         return await ModelType.objects.fetchone(q)
 
     def _default_registry(self):
-        """ Add all sql and json models to the registry
-        """
+        """Add all sql and json models to the registry"""
         registry = JSONSerializer.instance().registry.copy()
         registry.update({m.__model__: m for m in find_sql_models()})
         return registry
 
 
-class SQLModelManager(ModelManager):
-    """ Manages models via aiopg, aiomysql, or similar libraries supporting
+class SQLModelManager(ModelManager, Generic[T]):
+    """Manages models via aiopg, aiomysql, or similar libraries supporting
     SQLAlchemy tables. It stores a table for each class and when accessed
     on a Model subclass it returns a table proxy binding.
 
@@ -520,15 +557,11 @@ class SQLModelManager(ModelManager):
     #: Cache results
     cache = Bool(True)
 
-    def _default_metadata(self):
-        return sa.MetaData(
-            SQLBinding(manager=self),
-            naming_convention=self.conventions)
+    def _default_metadata(self) -> sa.MetaData:
+        return sa.MetaData(SQLBinding(manager=self), naming_convention=self.conventions)
 
-    def create_tables(self):
-        """ Create sqlalchemy tables for all registered SQLModels
-
-        """
+    def create_tables(self) -> Dict[Type["SQLModel"], sa.Table]:
+        """Create sqlalchemy tables for all registered SQLModels"""
         tables = {}
         for cls in find_sql_models():
             table = cls.__table__
@@ -539,10 +572,8 @@ class SQLModelManager(ModelManager):
             tables[cls] = table
         return tables
 
-    def __get__(self, obj, cls=None):
-        """ Retrieve the table for the requested object or class.
-
-        """
+    def __get__(self, obj: T, cls: Optional[Type[T]] = None) -> "SQLTableProxy[T]":
+        """Retrieve the table for the requested object or class."""
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
             return self  # Only return the client when used from a Model
@@ -555,15 +586,18 @@ class SQLModelManager(ModelManager):
         return proxy
 
     def _default_database(self):
-        raise EnvironmentError("No database engine has been set. Use "
-                               "SQLModelManager.instance().database = <db>")
+        raise EnvironmentError(
+            "No database engine has been set. Use "
+            "SQLModelManager.instance().database = <db>"
+        )
 
 
 class ConnectionProxy(Atom):
-    """ An wapper for a connection to be used with async with syntax that
+    """An wapper for a connection to be used with async with syntax that
     does nothing but passes the existing connection when entered.
 
     """
+
     connection = Value()
 
     async def __aenter__(self):
@@ -573,7 +607,7 @@ class ConnectionProxy(Atom):
         pass
 
 
-class SQLTableProxy(Atom):
+class SQLTableProxy(Atom, Generic[T]):
     #: Table this is a proxy to
     table = Instance(sa.Table)
 
@@ -584,14 +618,14 @@ class SQLTableProxy(Atom):
     cache = Typed(weakref.WeakValueDictionary, ())
 
     #: Key used to pull the connection out of filter kwargs
-    connection_kwarg = Str('connection')
+    connection_kwarg = Str("connection")
 
     @property
     def engine(self):
         return self.table.bind.manager.database
 
     def connection(self, connection=None):
-        """ Create a new connection or the return given connection as an async
+        """Create a new connection or the return given connection as an async
         contextual object.
 
         Parameters
@@ -610,7 +644,7 @@ class SQLTableProxy(Atom):
         return ConnectionProxy(connection=connection)
 
     def create_table(self):
-        """ A wrapper for create which catches the create queries then executes
+        """A wrapper for create which catches the create queries then executes
         them
         """
         table = self.table
@@ -627,8 +661,8 @@ class SQLTableProxy(Atom):
         async with self.connection(connection) as conn:
             return await conn.execute(*args, **kwargs)
 
-    async def fetchall(self, query, connection=None):
-        """ Fetch all results for the query.
+    async def fetchall(self, query: Union[str, sa.Query], connection=None):
+        """Fetch all results for the query.
 
         Parameters
         ----------
@@ -648,7 +682,7 @@ class SQLTableProxy(Atom):
             return await r.fetchall()
 
     async def fetchmany(self, query, size=None, connection=None):
-        """ Fetch size results for the query.
+        """Fetch size results for the query.
 
         Parameters
         ----------
@@ -669,8 +703,8 @@ class SQLTableProxy(Atom):
             r = await conn.execute(query)
             return await r.fetchmany(size)
 
-    async def fetchone(self, query, connection=None):
-        """ Fetch a single result for the query.
+    async def fetchone(self, query: QueryType, connection=None):
+        """Fetch a single result for the query.
 
         Parameters
         ----------
@@ -688,8 +722,8 @@ class SQLTableProxy(Atom):
             r = await conn.execute(query)
             return await r.fetchone()
 
-    async def scalar(self, query, connection=None):
-        """ Fetch the scalar result for the query.
+    async def scalar(self, query: QueryType, connection=None):
+        """Fetch the scalar result for the query.
 
         Parameters
         ----------
@@ -707,8 +741,8 @@ class SQLTableProxy(Atom):
             r = await conn.execute(query)
             return await r.scalar()
 
-    async def get_or_create(self, **filters):
-        """ Get or create a model matching the given criteria
+    async def get_or_create(self, **filters) -> TupleType[T, bool]:
+        """Get or create a model matching the given criteria
 
         Parameters
         ----------
@@ -726,14 +760,15 @@ class SQLTableProxy(Atom):
             return (obj, False)
         connection_kwarg = self.connection_kwarg
         connection = filters.get(connection_kwarg)
-        state = {k: v for k, v in filters.items()
-                 if '__' not in k and k != connection_kwarg}
+        state = {
+            k: v for k, v in filters.items() if "__" not in k and k != connection_kwarg
+        }
         obj = self.model(**state)
         await obj.save(force_insert=True, connection=connection)
         return (obj, True)
 
-    async def create(self, **state):
-        """ Create a and save model with the given state.
+    async def create(self, **state) -> T:
+        """Create a and save model with the given state.
 
         The connection parameter is popped from this state.
 
@@ -754,13 +789,11 @@ class SQLTableProxy(Atom):
         return obj
 
     def __getattr__(self, name):
-        """ All other fields are delegated to the query set
-
-        """
+        """All other fields are delegated to the query set"""
         return getattr(SQLQuerySet(proxy=self), name)
 
 
-class SQLQuerySet(Atom):
+class SQLQuerySet(Atom, Generic[T]):
     #: Proxy
     proxy = Instance(SQLTableProxy)
     connection = Value()
@@ -773,12 +806,12 @@ class SQLQuerySet(Atom):
     limit_count = Int()
     query_offset = Int()
 
-    def clone(self, **kwargs):
+    def clone(self, **kwargs) -> "SQLQuerySet[T]":
         state = self.__getstate__()
         state.update(kwargs)
         return self.__class__(**state)
 
-    def query(self, query_type='select', *columns, **kwargs):
+    def query(self, query_type: str = "select", *columns, **kwargs) -> sa.Expression:
         if kwargs:
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
@@ -797,12 +830,12 @@ class SQLQuerySet(Atom):
                 from_table = sa.join(from_table, table, isouter=outer_join)
                 tables.append(table)
 
-        if query_type == 'select':
+        if query_type == "select":
             q = sa.select(columns or tables, use_labels=use_labels)
             q = q.select_from(from_table)
-        elif query_type == 'delete':
+        elif query_type == "delete":
             q = sa.delete(from_table)
-        elif query_type == 'update':
+        elif query_type == "update":
             q = sa.update(from_table)
         else:
             raise ValueError("Unsupported query type")
@@ -827,8 +860,10 @@ class SQLQuerySet(Atom):
 
         return q
 
-    def select_related(self, *related, outer_join=None):
-        """ Define related fields to join in the query.
+    def select_related(
+        self, *related: Sequence[str], outer_join: Optional[bool] = None
+    ) -> "SQLQuerySet[T]":
+        """Define related fields to join in the query.
 
         Parameters
         ----------
@@ -845,11 +880,11 @@ class SQLQuerySet(Atom):
         """
         outer_join = self.outer_join if outer_join is None else outer_join
         return self.clone(
-            related_clauses=self.related_clauses + list(related),
-            outer_join=outer_join)
+            related_clauses=self.related_clauses + list(related), outer_join=outer_join
+        )
 
     def order_by(self, *args):
-        """ Order the query by the given fields.
+        """Order the query by the given fields.
 
         Parameters
         ----------
@@ -868,7 +903,7 @@ class SQLQuerySet(Atom):
         for arg in args:
             if isinstance(arg, str):
                 # Convert django-style to sqlalchemy ordering column
-                if arg[0] == '-':
+                if arg[0] == "-":
                     field = arg[1:]
                     ascending = False
                 else:
@@ -885,11 +920,10 @@ class SQLQuerySet(Atom):
                 clause = arg
             if clause not in order_clauses:
                 order_clauses.append(clause)
-        return self.clone(order_clauses=order_clauses,
-                          related_clauses=related_clauses)
+        return self.clone(order_clauses=order_clauses, related_clauses=related_clauses)
 
     def distinct(self, *args):
-        """ Apply distinct on the given column.
+        """Apply distinct on the given column.
 
         Parameters
         ----------
@@ -913,11 +947,12 @@ class SQLQuerySet(Atom):
                 clause = arg
             if clause not in distinct_clauses:
                 distinct_clauses.append(clause)
-        return self.clone(distinct_clauses=distinct_clauses,
-                          related_clauses=related_clauses)
+        return self.clone(
+            distinct_clauses=distinct_clauses, related_clauses=related_clauses
+        )
 
     def filter(self, *args, **kwargs):
-        """ Filter the query by the given parameters. This accepts sqlalchemy
+        """Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
 
         Parameters
@@ -958,7 +993,7 @@ class SQLQuerySet(Atom):
             # Support lookups by model
             if isinstance(v, Model):
                 v = v.serializer.flatten_object(v, scope=None)
-            elif op in ('in', 'notin'):
+            elif op in ("in", "notin"):
                 # Flatten lists when using in or notin ops
                 v = model.serializer.flatten(v, scope=None)
 
@@ -968,7 +1003,8 @@ class SQLQuerySet(Atom):
         return self.clone(
             connection=connection,
             filter_clauses=filter_clauses,
-            related_clauses=related_clauses)
+            related_clauses=related_clauses,
+        )
 
     def __getitem__(self, key):
         if isinstance(key, slice):
@@ -994,8 +1030,14 @@ class SQLQuerySet(Atom):
     # -------------------------------------------------------------------------
     # Query execution API
     # -------------------------------------------------------------------------
-    async def values(self, *args, distinct=False, flat=False, group_by=None):
-        """ Returns the results as a list of dict instead of models.
+    async def values(
+        self,
+        *args,
+        distinct: bool = False,
+        flat: bool = False,
+        group_by: Optional[Sequence[Union[str, sa.Column]]] = None,
+    ) -> Sequence[Any]:
+        """Returns the results as a list of dict instead of models.
 
         Parameters
         ----------
@@ -1016,8 +1058,7 @@ class SQLQuerySet(Atom):
 
         """
         if flat and len(args) != 1:
-            raise ValueError(
-                "Values with flat=True can only have one param")
+            raise ValueError("Values with flat=True can only have one param")
         if args:
             model = self.proxy.model
             columns = []
@@ -1025,9 +1066,9 @@ class SQLQuerySet(Atom):
                 if isinstance(col, str):
                     col = resolve_member_column(model, col)
                 columns.append(col)
-            q = self.query('select', *columns)
+            q = self.query("select", *columns)
         else:
-            q = self.query('select')
+            q = self.query("select")
         if group_by is not None:
             q = q.group_by(group_by)
         if distinct:
@@ -1037,10 +1078,10 @@ class SQLQuerySet(Atom):
             return [row[0] for row in cursor]
         return cursor
 
-    async def count(self, *args, **kwargs):
+    async def count(self, *args, **kwargs) -> int:
         if args or kwargs:
             return await self.filter(*args, **kwargs).count()
-        subq = self.query('select').alias('subquery')
+        subq = self.query("select").alias("subquery")
         q = sa.func.count().select().select_from(subq)
         return await self.proxy.scalar(q, connection=self.connection)
 
@@ -1063,24 +1104,24 @@ class SQLQuerySet(Atom):
             if isinstance(col, str):
                 col = resolve_member_column(model, col)
             columns.append(func(col) if func is not None else col)
-        subq = self.query('select').alias('subquery')
+        subq = self.query("select").alias("subquery")
         q = sa.select(columns).select_from(subq)
         return self.proxy.fetchone(q, connection=self.connection)
 
-    async def exists(self, *args, **kwargs):
+    async def exists(self, *args, **kwargs) -> bool:
         if args or kwargs:
             return await self.filter(*args, **kwargs).exists()
-        q = sa.exists(self.query('select')).select()
+        q = sa.exists(self.query("select")).select()
         return await self.proxy.scalar(q, connection=self.connection)
 
     async def delete(self, *args, **kwargs):
         if args or kwargs:
             return await self.filter(*args, **kwargs).delete()
-        q = self.query('delete')
+        q = self.query("delete")
         return await self.proxy.execute(q, connection=self.connection)
 
     async def update(self, **values):
-        q = self.query('update').values(**values)
+        q = self.query("update").values(**values)
         return await self.proxy.execute(q, connection=self.connection)
 
     def __await__(self):
@@ -1089,21 +1130,22 @@ class SQLQuerySet(Atom):
         yield from f
         return f.result()
 
-    async def all(self, *args, **kwargs):
+    async def all(self, *args, **kwargs) -> Sequence[T]:
         if args or kwargs:
             return await self.filter(*args, **kwargs).all()
-        q = self.query('select')
+        q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
         return [await restore(row) for row in cursor]
 
-    async def get(self, *args, **kwargs):
+    async def get(self, *args, **kwargs) -> Optional[T]:
         if args or kwargs:
             return await self.filter(*args, **kwargs).get()
-        q = self.query('select')
+        q = self.query("select")
         row = await self.proxy.fetchone(q, connection=self.connection)
-        if row is not None:
-            return await self.proxy.model.restore(row)
+        if row is None:
+            return None
+        return await self.proxy.model.restore(row)
 
 
 class SQLBinding(Atom):
@@ -1136,8 +1178,7 @@ class SQLBinding(Atom):
         return self
 
     def compiler(self, statement, parameters, **kwargs):
-        return self.dialect.compiler(
-            statement, parameters, engine=self, **kwargs)
+        return self.dialect.compiler(statement, parameters, engine=self, **kwargs)
 
     def create(self, entity, **kwargs):
         kwargs["checkfirst"] = False
@@ -1149,13 +1190,11 @@ class SQLBinding(Atom):
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
 
-    def _run_ddl_visitor(
-            self, visitorcallable, element, connection=None, **kwargs):
+    def _run_ddl_visitor(self, visitorcallable, element, connection=None, **kwargs):
         kwargs["checkfirst"] = False
         visitorcallable(self.dialect, self, **kwargs).traverse_single(element)
 
-    def _run_visitor(
-            self, visitorcallable, element, connection=None, **kwargs):
+    def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
         kwargs["checkfirst"] = False
         node = visitorcallable(self.dialect, self, **kwargs)
         node.traverse_single(element)
@@ -1177,9 +1216,8 @@ class SQLBinding(Atom):
 
 
 class SQLMeta(ModelMeta):
-    """ Both the pk and _id are aliases to the primary key
+    """Both the pk and _id are aliases to the primary key"""
 
-    """
     def __new__(meta, name, bases, dct):
         cls = ModelMeta.__new__(meta, name, bases, dct)
 
@@ -1188,21 +1226,22 @@ class SQLMeta(ModelMeta):
         # If a pk field is defined use that insetad of _id
         pk = None
         for m in members.values():
-            if m.name == '_id':
+            if m.name == "_id":
                 continue
-            if m.metadata and m.metadata.get('primary_key'):
+            if m.metadata and m.metadata.get("primary_key"):
                 if pk is not None:
                     raise NotImplementedError(
-                        "Using multiple primary keys is not yet supported.")
+                        "Using multiple primary keys is not yet supported."
+                    )
                 pk = m
 
         if pk:
             cls._id = pk
-            members['_id'] = pk
-            cls.__fields__ = tuple((f for f in cls.__fields__ if f != '_id'))
+            members["_id"] = pk
+            cls.__fields__ = tuple((f for f in cls.__fields__ if f != "_id"))
 
         # Set the pk name
-        cls.__pk__ = (cls._id.metadata or {}).get('name', cls._id.name)
+        cls.__pk__ = (cls._id.metadata or {}).get("name", cls._id.name)
 
         # Set to the sqlalchemy Table
         cls.__table__ = None
@@ -1213,35 +1252,34 @@ class SQLMeta(ModelMeta):
 
         # If a Meta class is defined check it's validity and if extending
         # do not inherit the abstract attribute
-        Meta = dct.get('Meta', None)
+        Meta = dct.get("Meta", None)
         if Meta is not None:
             for f in dir(Meta):
-                if f.startswith('_'):
+                if f.startswith("_"):
                     continue
                 if f not in VALID_META_FIELDS:
-                    raise TypeError(
-                        f'{f} is not a valid Meta field on {cls}.')
+                    raise TypeError(f"{f} is not a valid Meta field on {cls}.")
 
-            db_table = getattr(Meta, 'db_table', None)
+            db_table = getattr(Meta, "db_table", None)
             if db_table:
                 cls.__model__ = db_table
 
         # If this inherited from an abstract model but didn't specify
         # Meta info make the subclass not abstract unless it was redefined
-        base_meta = getattr(cls, 'Meta', None)
-        if base_meta and getattr(base_meta, 'abstract', None):
+        base_meta = getattr(cls, "Meta", None)
+        if base_meta and getattr(base_meta, "abstract", None):
             if not Meta:
+
                 class Meta(base_meta):
                     abstract = False
+
                 cls.Meta = Meta
-            elif getattr(Meta, 'abstract', None) is None:
+            elif getattr(Meta, "abstract", None) is None:
                 Meta.abstract = False
 
         # Create a set of fields to remove from state before saving to the db
         # this removes Relation instances and several needed for json
-        excluded_fields = cls.__excluded_fields__ = {
-            '__model__', '__ref__', '_id'
-        }
+        excluded_fields = cls.__excluded_fields__ = {"__model__", "__ref__", "_id"}
 
         for name, member in cls.members().items():
             if isinstance(member, Relation):
@@ -1251,7 +1289,7 @@ class SQLMeta(ModelMeta):
         renamed_fields = cls.__renamed_fields__ = {}
         for old_name, member in cls.members().items():
             if member.metadata:
-                new_name = member.metadata.get('name')
+                new_name = member.metadata.get("name")
                 if new_name is not None:
                     renamed_fields[old_name] = new_name
 
@@ -1259,7 +1297,7 @@ class SQLMeta(ModelMeta):
 
 
 class SQLModel(Model, metaclass=SQLMeta):
-    """ A model that can be saved and restored to and from a database supported
+    """A model that can be saved and restored to and from a database supported
     by sqlalchemy.
 
     """
@@ -1274,13 +1312,15 @@ class SQLModel(Model, metaclass=SQLMeta):
     objects = SQLModelManager.instance()
 
     @classmethod
-    async def restore(cls, state, force=None):
-        """ Restore an object from the database using the primary key. Save
+    async def restore(
+        cls: Type[T], state: StateType, force: Optional[bool] = None, **kwargs: Any
+    ) -> T:
+        """Restore an object from the database using the primary key. Save
         a ref in the table's object cache.  If force is True, update
         the cache if it exists.
         """
         try:
-            pk = state[f'{cls.__model__}_{cls.__pk__}']
+            pk = state[f"{cls.__model__}_{cls.__pk__}"]
         except KeyError:
             pk = state[cls.__pk__]
 
@@ -1303,13 +1343,15 @@ class SQLModel(Model, metaclass=SQLMeta):
 
         return obj
 
-    async def __restorestate__(self, state, scope=None):
+    async def __restorestate__(
+        self, state: StateType, scope: Optional[ScopeType] = None
+    ):
         # Holds cleaned state extracted for this model which may come from
         # a DB row using labels or renamed columns
-        cleaned_state = {}
+        cleaned_state: StateType = {}
 
         # Check if the state is using labels by looking for the pk field
-        pk_label = f'{self.__model__}_{self.__pk__}'
+        pk_label = f"{self.__model__}_{self.__pk__}"
 
         if pk_label in state:
             # Convert row to dict because it speeds up lookups
@@ -1320,16 +1362,16 @@ class SQLModel(Model, metaclass=SQLMeta):
 
             # Pull known
             for name, m in self.members().items():
-                metadata = (m.metadata or {})
-                field_name = metadata.get('name', name)
-                field_label = f'{table_name}_{field_name}'
+                metadata = m.metadata or {}
+                field_name = metadata.get("name", name)
+                field_label = f"{table_name}_{field_name}"
 
                 if isinstance(m, FK_TYPES):
                     RelModel = resolve_member_type(m)
                     if issubclass(RelModel, SQLModel):
                         # If the related model was joined, the pk field should
                         # exist so automatically restore that as well
-                        rel_pk_name = f'{RelModel.__model__}_{RelModel.__pk__}'
+                        rel_pk_name = f"{RelModel.__model__}_{RelModel.__pk__}"
                         try:
                             rel_id = state[field_label]
                         except KeyError:
@@ -1352,13 +1394,12 @@ class SQLModel(Model, metaclass=SQLMeta):
                 elif isinstance(m, Relation):
                     # Through must be a callable which returns a tuple of
                     # the through table model
-                    through_factory = metadata.get('through')
+                    through_factory = metadata.get("through")
                     if through_factory:
                         M2M, this_attr, rel_attr = through_factory()
                         cleaned_state[name] = [
                             getattr(r, rel_attr)
-                            for r in await M2M.objects.filter(
-                                **{this_attr: pk})
+                            for r in await M2M.objects.filter(**{this_attr: pk})
                         ]
                     else:
                         # Skip relations
@@ -1373,7 +1414,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         else:
             # If any column names were redefined use those instead
             for name, m in self.members().items():
-                field_name = (m.metadata or {}).get('name', name)
+                field_name = (m.metadata or {}).get("name", name)
 
                 try:
                     v = state[field_name]
@@ -1398,8 +1439,13 @@ class SQLModel(Model, metaclass=SQLMeta):
                 cleaned_state[name] = v
         await super().__restorestate__(cleaned_state, scope)
 
-    async def load(self, connection=None, reload=False, fields=None):
-        """ Alias to load this object from the database
+    async def load(
+        self,
+        connection=None,
+        reload: bool = False,
+        fields: Optional[Sequence[str]] = None,
+    ):
+        """Alias to load this object from the database
 
         Parameters
         ----------
@@ -1408,7 +1454,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         reload: Bool
             If True force reloading the state even if the state has
             already been loaded.
-        fields: Iterable[str]
+        fields: Sequence[str]
             Optional list of field names to load. Use this to refresh
             specific fields from the database.
 
@@ -1428,9 +1474,14 @@ class SQLModel(Model, metaclass=SQLMeta):
         state = await db.fetchone(q, connection=connection)
         await self.__restorestate__(state)
 
-    async def save(self, force_insert=False, force_update=False,
-                   update_fields=None, connection=None):
-        """ Alias to save this object to the database
+    async def save(
+        self,
+        force_insert: bool = False,
+        force_update: bool = False,
+        update_fields: Optional[Sequence[str]] = None,
+        connection=None,
+    ):
+        """Alias to save this object to the database
 
         Parameters
         ----------
@@ -1450,8 +1501,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
         """
         if force_insert and force_update:
-            raise ValueError(
-                'Cannot use force_insert and force_update together')
+            raise ValueError("Cannot use force_insert and force_update together")
 
         db = self.objects
         state = self.__getstate__()
@@ -1472,18 +1522,22 @@ class SQLModel(Model, metaclass=SQLMeta):
                 if update_fields is not None:
                     # Replace any update fields with the appropriate name
                     renamed = self.__renamed_fields__
-                    update_fields = (renamed.get(f, f) for f in update_fields)
+                    update_fields = [renamed.get(f, f) for f in update_fields]
 
                     # Replace update fields with only those given
                     state = {f: state[f] for f in update_fields}
 
-                q = table.update().where(
-                        table.c[self.__pk__] == self._id).values(**state)
+                q = (
+                    table.update()
+                    .where(table.c[self.__pk__] == self._id)
+                    .values(**state)
+                )
                 r = await conn.execute(q)
                 if not r.rowcount:
                     log.warning(
                         f'Did not update "{self}", either no rows with '
-                        f'pk={self._id} exist or it has not changed.')
+                        f"pk={self._id} exist or it has not changed."
+                    )
             else:
                 if not self._id:
                     # Postgres errors if using None for the pk
@@ -1493,7 +1547,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
                 # Don't overwrite if force inserting
                 if not self._id:
-                    if hasattr(r, 'lastrowid'):
+                    if hasattr(r, "lastrowid"):
                         self._id = r.lastrowid  # MySQL
                     else:
                         self._id = await r.scalar()  # Postgres
@@ -1504,7 +1558,7 @@ class SQLModel(Model, metaclass=SQLMeta):
             return r
 
     async def delete(self, connection=None):
-        """ Alias to delete this object in the database """
+        """Alias to delete this object in the database"""
         pk = self._id
         if not pk:
             return
@@ -1515,8 +1569,8 @@ class SQLModel(Model, metaclass=SQLMeta):
             r = await conn.execute(q)
             if not r.rowcount:
                 log.warning(
-                    f'Did not delete "{self}", no rows with '
-                    f'pk={self._id} exist.')
+                    f'Did not delete "{self}", no rows with ' f"pk={self._id} exist."
+                )
             del db.cache[pk]
             del self._id
             return r
