@@ -1,5 +1,5 @@
 """
-Copyright (c) 2018-2020, Jairus Martin.
+Copyright (c) 2018-2021, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -12,11 +12,10 @@ Created on Jun 12, 2018
 import os
 import logging
 import traceback
-from atom.api import (
-    Atom, Property, Instance, Dict, Str, Coerced, Value, Typed, Bytes, Bool,
-    set_default
-)
-from atom.atom import AtomMeta
+from typing import Dict as DictType
+from typing import List as ListType
+from typing import Tuple as TupleType
+from typing import Any, Generic, Type, TypeVar, Optional
 from collections.abc import MutableMapping
 from random import getrandbits
 from pprint import pformat
@@ -24,13 +23,30 @@ from base64 import b64encode, b64decode
 from datetime import date, time, datetime
 from decimal import Decimal
 from uuid import UUID
+from atom.api import (
+    Atom,
+    Member,
+    Property,
+    Instance,
+    Dict,
+    Str,
+    Coerced,
+    Value,
+    Typed,
+    Bytes,
+    Bool,
+    set_default,
+)
+from atom.atom import AtomMeta
+
+T = TypeVar("T")
+ScopeType = DictType[str, Any]
+StateType = DictType[str, Any]
+logger = logging.getLogger("atomdb")
 
 
-logger = logging.getLogger('atomdb')
-
-
-def find_subclasses(cls):
-    """ Finds subclasses of the given class"""
+def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
+    """Finds subclasses of the given class"""
     classes = []
     for subclass in cls.__subclasses__():
         classes.append(subclass)
@@ -39,34 +55,37 @@ def find_subclasses(cls):
 
 
 class ModelSerializer(Atom):
-    """ Handles serializing and deserializing of Model subclasses. It
+    """Handles serializing and deserializing of Model subclasses. It
     will automatically save and restore references where present.
 
     """
+
     #: Hold one instance per subclass for easy reuse
-    _instances = {}
+    _instances: DictType[Type["ModelSerializer"], "ModelSerializer"] = {}
 
     #: Store all registered models
     registry = Dict()
 
     #: Mapping of type name to coercer function
-    coercers = Dict(default={
-        'datetime.date': lambda s: date(**s),
-        'datetime.datetime': lambda s: datetime(**s),
-        'datetime.time': lambda s: time(**s),
-        'bytes': lambda s: b64decode(s['bytes']),
-        'decimal': lambda s: Decimal(s['value']),
-        'uuid': lambda s: UUID(s['id']),
-    })
+    coercers = Dict(
+        default={
+            "datetime.date": lambda s: date(**s),
+            "datetime.datetime": lambda s: datetime(**s),
+            "datetime.time": lambda s: time(**s),
+            "bytes": lambda s: b64decode(s["bytes"]),
+            "decimal": lambda s: Decimal(s["value"]),
+            "uuid": lambda s: UUID(s["id"]),
+        }
+    )
 
     @classmethod
-    def instance(cls):
+    def instance(cls: Type["ModelSerializer"]) -> "ModelSerializer":
         if cls not in ModelSerializer._instances:
             ModelSerializer._instances[cls] = cls()
         return ModelSerializer._instances[cls]
 
-    def flatten(self, v, scope=None):
-        """ Convert Model objects to a dict
+    def flatten(self, v: Any, scope: Optional[ScopeType] = None) -> Any:
+        """Convert Model objects to a dict
 
         Parameters
         ----------
@@ -94,8 +113,8 @@ class ModelSerializer(Atom):
         # TODO: Handle other object types
         return v
 
-    def flatten_object(self, obj, scope):
-        """ Serialize a model for entering into the database
+    def flatten_object(self, obj: "Model", scope: ScopeType) -> Any:
+        """Serialize a model for entering into the database
 
         Parameters
         ----------
@@ -112,9 +131,8 @@ class ModelSerializer(Atom):
         """
         raise NotImplementedError
 
-
-    async def unflatten(self, v, scope=None):
-        """ Convert dict or list to Models
+    async def unflatten(self, v: Any, scope: Optional[ScopeType] = None) -> Any:
+        """Convert dict or list to Models
 
         Parameters
         ----------
@@ -134,18 +152,18 @@ class ModelSerializer(Atom):
 
         if isinstance(v, dict):
             # Circular reference
-            ref = v.get('__ref__')
+            ref = v.get("__ref__")
             if ref is not None and ref in scope:
                 return scope[ref]
 
             # Create the object
-            name = v.get('__model__')
+            name = v.get("__model__")
             if name is not None:
                 cls = self.registry[name]
                 return await cls.serializer.unflatten_object(cls, v, scope)
 
             # Convert py types
-            py_type = v.pop('__py__', None)
+            py_type = v.pop("__py__", None)
             if py_type:
                 coercer = self.coercers.get(py_type)
                 if coercer:
@@ -156,8 +174,8 @@ class ModelSerializer(Atom):
             return [await unflatten(item, scope) for item in v]
         return v
 
-    async def unflatten_object(self, cls, state, scope):
-        """ Restore the object for the given class, state, and scope.
+    async def unflatten_object(self, cls: "Model", state, scope) -> Optional["Model"]:
+        """Restore the object for the given class, state, and scope.
         If a reference is given the scope should be updated with the newly
         created object using the given ref.
 
@@ -174,8 +192,8 @@ class ModelSerializer(Atom):
             A the newly created object (or an existing object if using a cache)
             or None if this object does not exist in the database.
         """
-        _id = state.get('_id')
-        ref = state.get('__ref__')
+        _id = state.get("_id")
+        ref = state.get("__ref__")
 
         # Get the object for this id, retrieve from cache if needed
         obj, created = await self.get_or_create(cls, state, scope)
@@ -198,8 +216,10 @@ class ModelSerializer(Atom):
             await obj.__restorestate__(state, scope)
         return obj
 
-    async def get_or_create(self, cls, state, scope):
-        """ Get a cached object for this _id or create a new one. Subclasses
+    async def get_or_create(
+        self, cls: "Model", state: Any, scope: ScopeType
+    ) -> TupleType["Model", bool]:
+        """Get a cached object for this _id or create a new one. Subclasses
         should override this as needed to provide object caching if desired.
 
         Parameters
@@ -219,12 +239,12 @@ class ModelSerializer(Atom):
         """
         return (cls.__new__(cls), True)
 
-    async def get_object_state(self, obj,  state, scope):
-        """ Lookup the state needed to restore the given object id and class.
+    async def get_object_state(self, obj: "Model", state: Any, scope: ScopeType) -> Any:
+        """Lookup the state needed to restore the given object id and class.
 
         Parameters
         ----------
-        obj: Object
+        obj: Model
             The object created by `get_or_create`
         state: Dict
             Unflattened state of object to restore
@@ -233,15 +253,15 @@ class ModelSerializer(Atom):
 
         Returns
         -------
-        result: Dict
+        result: Any
             The model state needed to restore this object
 
         """
         raise NotImplementedError
 
 
-class ModelManager(Atom):
-    """ A descriptor so you can use this somewhat like Django's models.
+class ModelManager(Atom, Generic[T]):
+    """A descriptor so you can use this somewhat like Django's models.
     Assuming your using motor.
 
     Examples
@@ -251,10 +271,10 @@ class ModelManager(Atom):
     """
 
     #: Stores instances of each class so we can easily reuse them if desired
-    _instances = {}
+    _instances: DictType[Type["ModelManager"], "ModelManager"] = {}
 
     @classmethod
-    def instance(cls):
+    def instance(cls) -> "ModelManager":
         if cls not in ModelManager._instances:
             ModelManager._instances[cls] = cls()
         return ModelManager._instances[cls]
@@ -262,11 +282,11 @@ class ModelManager(Atom):
     #: Used to access the database
     database = Value()
 
-    def _default_database(self):
+    def _default_database(self) -> Any:
         raise NotImplementedError
 
-    def __get__(self, obj, cls=None):
-        """ Handle objects from the class that owns the manager. Subclasses
+    def __get__(self, obj: T, cls: Optional[Type[T]] = None) -> "ModelManager[T]":
+        """Handle objects from the class that oType[wns the manager. Subclasses
         should override this as needed.
 
         """
@@ -279,31 +299,53 @@ class ModelMeta(AtomMeta):
 
         # Fields that are saved in the db. By default it uses all atom members
         # that don't start with an underscore and are not taged with store.
-        if '__fields__' not in dct:
-            cls.__fields__ = tuple((
-                m.name for m in cls.members().values()
-                if (m.metadata or {}).get('store', not m.name.startswith("_"))
-            ))
+        if "__fields__" not in dct:
+            fields = []
+            for name, m in cls.__atom_members__.items():
+                if meta.is_db_field(meta, m):
+                    fields.append(name)
+            cls.__fields__ = fields
 
         # Model name used so the serializer knows what class to recreate
         # when restoring
-        if '__model__' not in dct:
-            cls.__model__ = f'{cls.__module__}.{cls.__name__}'
+        if "__model__" not in dct:
+            cls.__model__ = f"{cls.__module__}.{cls.__name__}"
         return cls
+
+    def is_db_field(meta, m: Member) -> bool:
+        """Check if the member should be saved into the database.
+
+        Parameters
+        ----------
+        m: Member
+            The atom member to check.
+
+        Returns
+        -------
+        result: bool
+            Whether the
+
+        """
+        metadata = m.metadata
+        default = not m.name.startswith("_")
+        if metadata is not None:
+            return metadata.get("store", default)
+        return default
 
 
 class Model(Atom, metaclass=ModelMeta):
-    """ An atom model that can be serialized and deserialized to and from
+    """An atom model that can be serialized and deserialized to and from
     a database.
 
     """
-    __slots__ = '__weakref__'
+
+    __slots__ = "__weakref__"
 
     #: ID of this object in the database. Subclasses can redefine this as needed
     _id = Bytes()
 
     #: A unique ID used to handle cyclical serialization and deserialization
-    __ref__ = Bytes(factory=lambda: b'%0x' % getrandbits(30 * 4))
+    __ref__ = Bytes(factory=lambda: b"%0x" % getrandbits(30 * 4))
 
     #: Flag to indicate if this model has been restored or saved
     __restored__ = Bool().tag(store=False)
@@ -312,15 +354,16 @@ class Model(Atom, metaclass=ModelMeta):
     #: upon successful save and never modified
     #:__state__ = Typed(dict).tag(store=False)
 
-    # ==========================================================================
+    # --------------------------------------------------------------------------
     # Serialization API
-    # ==========================================================================
+    # --------------------------------------------------------------------------
 
     #: Handles encoding and decoding. Subclasses should redefine this to a
     #: subclass of ModelSerializer
-    serializer = None
 
-    def __getstate__(self, scope=None):
+    serializer: ModelSerializer = ModelSerializer.instance()
+
+    def __getstate__(self, scope: Optional[ScopeType] = None) -> StateType:
         default_flatten = self.serializer.flatten
 
         scope = scope or {}
@@ -330,23 +373,25 @@ class Model(Atom, metaclass=ModelMeta):
         scope[ref] = self
 
         state = {
-            '__model__': self.__model__,
-            '__ref__': ref,
+            "__model__": self.__model__,
+            "__ref__": ref,
         }
         if self._id is not None:
-            state['_id'] = self._id
+            state["_id"] = self._id
 
         members = self.members()
         for f in self.__fields__:
             m = members[f]
             meta = m.metadata or {}
-            flatten = meta.get('flatten', default_flatten)
+            flatten = meta.get("flatten", default_flatten)
             state[f] = flatten(getattr(self, f), scope)
 
         return state
 
-    async def __restorestate__(self, state, scope=None):
-        """ Restore an object from the a state from the database. This is
+    async def __restorestate__(
+        self, state: StateType, scope: Optional[ScopeType] = None
+    ):
+        """Restore an object from the a state from the database. This is
         async as it will lookup any referenced objects from the DB.
 
         State is restored by calling setattr(k, v) for every item in the state
@@ -363,12 +408,13 @@ class Model(Atom, metaclass=ModelMeta):
             The __ref__ value is used as the keys.
 
         """
-        name = state.get('__model__', self.__model__)
+        name = state.get("__model__", self.__model__)
         if name != self.__model__:
-            raise ValueError(f"Trying to use {name} state for "
-                             f"{self.__model__} object")
+            raise ValueError(
+                f"Trying to use {name} state for " f"{self.__model__} object"
+            )
         scope = scope or {}
-        ref = state.get('__ref__')
+        ref = state.get("__ref__")
         if ref is not None:
             scope[ref] = self
         members = self.members()
@@ -380,10 +426,10 @@ class Model(Atom, metaclass=ModelMeta):
             m = members.get(k)
             if m is not None:
                 meta = m.metadata or {}
-                order = meta.get('setstate_order', 1000)
+                order = meta.get("setstate_order", 1000)
 
                 # Allow  tagging a custom unflatten fn
-                unflatten = meta.get('unflatten', default_unflatten)
+                unflatten = meta.get("unflatten", default_unflatten)
 
                 valid_keys.append((order, k, unflatten))
         valid_keys.sort(key=lambda it: it[0])
@@ -405,7 +451,8 @@ class Model(Atom, metaclass=ModelMeta):
                     f"\nValue: {pformat(v)}"
                     f"\nScope: {pformat(scope)}"
                     f"\nState: {pformat(state)}"
-                    f"\n{exc}")
+                    f"\n{exc}"
+                )
 
         # Update restored state
         self.__restored__ = True
@@ -415,94 +462,90 @@ class Model(Atom, metaclass=ModelMeta):
     # ==========================================================================
 
     #: Handles database access. Subclasses should redefine this.
-    objects = None
+    objects: ModelManager = ModelManager()
 
     @classmethod
-    async def restore(cls, state):
-        """ Restore an object from the database state """
+    async def restore(cls: Type[T], state: StateType, **kwargs: Any) -> T:
+        """Restore an object from the database state"""
         obj = cls.__new__(cls)
         await obj.__restorestate__(state)
         return obj
 
     async def load(self):
-        """ Alias to load this object from the database """
+        """Alias to load this object from the database"""
         raise NotImplementedError
 
     async def save(self):
-        """ Alias to delete this object to the database """
+        """Alias to delete this object to the database"""
         raise NotImplementedError
 
     async def delete(self):
-        """ Alias to delete this object in the database """
+        """Alias to delete this object in the database"""
         raise NotImplementedError
 
 
 class JSONSerializer(ModelSerializer):
-
     def flatten(self, v, scope=None):
-        """ Flatten date, datetime, time, decimal, and bytes as a dict with
+        """Flatten date, datetime, time, decimal, and bytes as a dict with
         a __py__ field and arguments to reconstruct it. Also see the coercers
 
         """
         if isinstance(v, (date, datetime, time)):
             # This is inefficient space wise but still allows queries
-            s = {'__py__': f'{v.__class__.__module__}.{v.__class__.__name__}'}
+            s = {"__py__": f"{v.__class__.__module__}.{v.__class__.__name__}"}
             if isinstance(v, (date, datetime)):
-                s.update({
-                    'year': v.year,
-                    'month': v.month,
-                    'day': v.day
-                })
+                s.update({"year": v.year, "month": v.month, "day": v.day})
             if isinstance(v, (time, datetime)):
-                s.update({
-                    'hour': v.hour,
-                    'minute': v.minute,
-                    'second': v.second,
-                    'microsecond': v.microsecond,
-                    # TODO: Timezones
-                })
+                s.update(
+                    {
+                        "hour": v.hour,
+                        "minute": v.minute,
+                        "second": v.second,
+                        "microsecond": v.microsecond,
+                        # TODO: Timezones
+                    }
+                )
             return s
         if isinstance(v, bytes):
-            return {'__py__': 'bytes', 'bytes': b64encode(v).decode()}
+            return {"__py__": "bytes", "bytes": b64encode(v).decode()}
         if isinstance(v, Decimal):
-            return {'__py__': 'decimal', 'value': str(v)}
+            return {"__py__": "decimal", "value": str(v)}
         if isinstance(v, UUID):
-            return {'__py__': 'uuid', 'id': str(v)}
+            return {"__py__": "uuid", "id": str(v)}
         return super().flatten(v, scope)
 
     def flatten_object(self, obj, scope):
-        """ Flatten to just json but add in keys to know how to restore it.
-
-        """
+        """Flatten to just json but add in keys to know how to restore it."""
         ref = obj.__ref__
         if ref in scope:
-            return {'__ref__': ref, '__model__': obj.__model__}
+            return {"__ref__": ref, "__model__": obj.__model__}
         else:
             scope[ref] = obj
         state = obj.__getstate__(scope)
         _id = state.get("_id")
-        return {'_id': _id,
-                '__ref__': ref,
-                '__model__': state['__model__']} if _id else state
+        return (
+            {"_id": _id, "__ref__": ref, "__model__": state["__model__"]}
+            if _id
+            else state
+        )
 
-    async def get_object_state(self, obj,  state, scope):
-        """ State should be contained in the dict
-
-        """
+    async def get_object_state(self, obj, state, scope):
+        """State should be contained in the dict"""
         return state
 
-    def _default_registry(self):
+    def _default_registry(self) -> DictType[str, Type[Model]]:
         return {m.__model__: m for m in find_subclasses(JSONModel)}
 
 
 class JSONModel(Model):
-    """ A simple model that can be serialized to json. Useful for embedding
+    """A simple model that can be serialized to json. Useful for embedding
     within other objects.
 
     """
+
     serializer = JSONSerializer.instance()
 
     #: JSON cannot encode bytes
     _id = Str()
-    __ref__ = Str(factory=lambda: (b'%0x' % getrandbits(30 * 4)).decode())
+    __ref__ = Str(factory=lambda: (b"%0x" % getrandbits(30 * 4)).decode())
     __restored__ = set_default(True)

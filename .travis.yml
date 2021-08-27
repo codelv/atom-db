@@ -32,13 +32,16 @@ install:
   - pip install -U 'sqlalchemy<1.4'
 
   # Testing
-  - pip install -U codecov pytest pytest-coverage pytest-asyncio faker
+  - pip install -U codecov pytest pytest-coverage pytest-asyncio faker mypy isort black
 
   # Install
   - python setup.py develop
 
 script:
   - pytest -v tests --cov atomdb --cov-report xml
+  - mypy atomdb --ignore-missing-imports
+  - black atomdb --check --diff
+  - isort atomdb --check --diff
 
 after_success:
   - codecov
