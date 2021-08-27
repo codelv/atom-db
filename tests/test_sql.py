@@ -56,7 +56,7 @@ class JobRole(SQLModel):
 
     check_one_default = sa.schema.DDL('''
         CREATE OR REPLACE FUNCTION check_one_default() RETURNS TRIGGER
-        LANGUAGE plpgsql`
+        LANGUAGE plpgsql
         AS $$
         BEGIN
             IF EXISTS (SELECT * from "test_sql.JobRole"
