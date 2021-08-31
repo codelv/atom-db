@@ -1,3 +1,8 @@
+# 0.6.0
+
+- Add type hints
+- Drop python 3.6 support
+
 # 0.5.8
 
 - Add `composite_indexes` to Model Meta.
