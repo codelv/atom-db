@@ -1,5 +1,5 @@
 """
-Copyright (c) 2019, Jairus Martin.
+Copyright (c) 2019-2021, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
@@ -22,9 +22,10 @@ setup(
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
     requires=['atom'],
+    python_requires='>=3.7',
     install_requires=['atom'],
     optional_requires=[
-        'sqlalchemy', 'aiomysql', 'aiopg',  'aiosqlite', # sql database support
+        'sqlalchemy', 'aiomysql', 'aiopg',  'aiosqlite',  # sql database support
         'motor', 'txmongo'  # nosql database support
     ],
     packages=find_packages(),
