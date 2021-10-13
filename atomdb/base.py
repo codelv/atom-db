@@ -15,7 +15,7 @@ import traceback
 from typing import Dict as DictType
 from typing import List as ListType
 from typing import Tuple as TupleType
-from typing import Any, Generic, Type, TypeVar, Optional
+from typing import Any, ClassVar, Generic, Type, TypeVar, Optional, Union
 from collections.abc import MutableMapping
 from random import getrandbits
 from pprint import pformat
@@ -40,7 +40,7 @@ from atom.api import (
 from atom.atom import AtomMeta
 
 T = TypeVar("T")
-ScopeType = DictType[str, Any]
+ScopeType = DictType[Union[str, bytes], Any]
 StateType = DictType[str, Any]
 logger = logging.getLogger("atomdb")
 
@@ -174,7 +174,9 @@ class ModelSerializer(Atom):
             return [await unflatten(item, scope) for item in v]
         return v
 
-    async def unflatten_object(self, cls: "Model", state, scope) -> Optional["Model"]:
+    async def unflatten_object(
+        self, cls: Type["Model"], state, scope
+    ) -> Optional["Model"]:
         """Restore the object for the given class, state, and scope.
         If a reference is given the scope should be updated with the newly
         created object using the given ref.
@@ -217,7 +219,7 @@ class ModelSerializer(Atom):
         return obj
 
     async def get_or_create(
-        self, cls: "Model", state: Any, scope: ScopeType
+        self, cls: Type["Model"], state: Any, scope: ScopeType
     ) -> TupleType["Model", bool]:
         """Get a cached object for this _id or create a new one. Subclasses
         should override this as needed to provide object caching if desired.
@@ -339,7 +341,23 @@ class Model(Atom, metaclass=ModelMeta):
 
     """
 
+    # --------------------------------------------------------------------------
+    # Class attributes
+    # --------------------------------------------------------------------------
     __slots__ = "__weakref__"
+
+    #: List of database field member names
+    __fields__: ClassVar[ListType[str]]
+
+    #: Table name used when saving into the database
+    __model__: ClassVar[str]
+
+    #: Error handling
+    __on_error__: ClassVar[str] = "log"  # "drop" or "raise"
+
+    # --------------------------------------------------------------------------
+    # Internal model members
+    # --------------------------------------------------------------------------
 
     #: ID of this object in the database. Subclasses can redefine this as needed
     _id = Bytes()
@@ -437,22 +455,27 @@ class Model(Atom, metaclass=ModelMeta):
         # Save initial database state
         # self.__state__ = dict(state)
 
+        on_error = self.__on_error__
+
         for order, k, unflatten in valid_keys:
             try:
                 v = state[k]
                 obj = await unflatten(v, scope)
                 setattr(self, k, obj)
             except Exception as e:
-                exc = traceback.format_exc()
-                logger.error(
-                    f"Error loading state:"
-                    f"{self.__model__}.{k} = {pformat(obj)}:"
-                    f"\nSelf: {ref}: {scope.get(ref)}"
-                    f"\nValue: {pformat(v)}"
-                    f"\nScope: {pformat(scope)}"
-                    f"\nState: {pformat(state)}"
-                    f"\n{exc}"
-                )
+                if on_error == "raise":
+                    raise
+                elif on_error == "log":
+                    exc = traceback.format_exc()
+                    logger.debug(
+                        f"Error loading state:"
+                        f"{self.__model__}.{k} = {pformat(obj)}:"
+                        f"\nSelf: {ref}: {scope.get(ref)}"
+                        f"\nValue: {pformat(v)}"
+                        f"\nScope: {pformat(scope)}"
+                        f"\nState: {pformat(state)}"
+                        f"\n{exc}"
+                    )
 
         # Update restored state
         self.__restored__ = True

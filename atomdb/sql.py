@@ -20,8 +20,19 @@ from functools import wraps
 from typing import Dict as DictType
 from typing import List as ListType
 from typing import Tuple as TupleType
+from typing import Set as SetType
 from typing import Callable as CallableType
-from typing import Any, Type, Optional, Iterator, Union, Sequence, Generic, TypeVar
+from typing import (
+    Any,
+    ClassVar,
+    Type,
+    Optional,
+    Iterator,
+    Union,
+    Sequence,
+    Generic,
+    TypeVar,
+)
 from atom import api
 from atom.atom import AtomMeta
 from atom.api import (
@@ -127,7 +138,7 @@ QueryType = Union[str, sa.sql.expression.Executable]
 T = TypeVar("T", bound="SQLModel")
 
 
-def find_sql_models() -> Iterator["SQLModel"]:
+def find_sql_models() -> Iterator[Type["SQLModel"]]:
     """Finds all non-abstract imported SQLModels by looking up subclasses
     of the SQLModel.
 
@@ -152,7 +163,7 @@ class Relation(ContainerList):
     __slots__ = ("_to",)
 
     def __init__(self, item: CallableType[[], Type[Model]], default=None):
-        super(Relation, self).__init__(ForwardInstance(item), default=None)
+        super().__init__(ForwardInstance(item), default=None)
         self._to = None
 
     def resolve(self) -> Member:
@@ -228,7 +239,7 @@ def resolve_member_type(member: Member) -> Any:
 
 
 def resolve_member_column(
-    model: Model, field: str, related_clauses: Optional[ListType[str]] = None
+    model: "SQLModel", field: str, related_clauses: Optional[ListType[str]] = None
 ) -> sa.Column:
     """Get the sqlalchemy column for the given model and field.
 
@@ -384,9 +395,10 @@ def create_table_column(model: Model, member: Member) -> sa.Column:
     1. https://docs.sqlalchemy.org/en/latest/core/types.html
 
     """
-    if hasattr(member, "get_column"):
+    get_column = getattr(member, "get_column", None)
+    if get_column is not None:
         # Allow custom members to define the column programatically
-        return member.get_column(model)
+        return get_column(model)
 
     # Copy the metadata as we modify it
     metadata = member.metadata.copy() if member.metadata else {}
@@ -816,8 +828,8 @@ class SQLQuerySet(Atom, Generic[T]):
         if kwargs:
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
-        tables = [p.table]
         from_table = p.table
+        tables = [from_table]
         model = p.model
         members = model.members()
         use_labels = bool(self.related_clauses)
@@ -1302,6 +1314,21 @@ class SQLModel(Model, metaclass=SQLMeta):
     by sqlalchemy.
 
     """
+
+    #: Primary key field name
+    __pk__: ClassVar[str]
+
+    #: Models which link back to this
+    __backrefs__: ClassVar[SetType[TupleType[Type["SQLModel"], Member]]]
+
+    #: List of fields which have been tagged with a different column name
+    __renamed_fields__: ClassVar[DictType[str, str]]
+
+    #: Set of fields to exclude from the database
+    __excluded_fields__: ClassVar[SetType[str]]
+
+    #: Reference to the sqlalchemy table backing this model
+    __table__: ClassVar[Optional[sa.Table]]
 
     #: If no other member is tagged with primary_key=True this is used
     _id = Typed(int).tag(store=True, primary_key=True)
