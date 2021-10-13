@@ -61,7 +61,7 @@ class ModelSerializer(Atom):
     """
 
     #: Hold one instance per subclass for easy reuse
-    _instances: DictType[Type["ModelSerializer"], "ModelSerializer"] = {}
+    _instances: ClassVar[DictType[Type["ModelSerializer"], "ModelSerializer"]] = {}
 
     #: Store all registered models
     registry = Dict()
@@ -175,7 +175,7 @@ class ModelSerializer(Atom):
         return v
 
     async def unflatten_object(
-        self, cls: Type["Model"], state, scope
+        self, cls: Type["Model"], state: StateType, scope: ScopeType
     ) -> Optional["Model"]:
         """Restore the object for the given class, state, and scope.
         If a reference is given the scope should be updated with the newly
@@ -262,7 +262,7 @@ class ModelSerializer(Atom):
         raise NotImplementedError
 
 
-class ModelManager(Atom, Generic[T]):
+class ModelManager(Atom):
     """A descriptor so you can use this somewhat like Django's models.
     Assuming your using motor.
 
@@ -273,7 +273,7 @@ class ModelManager(Atom, Generic[T]):
     """
 
     #: Stores instances of each class so we can easily reuse them if desired
-    _instances: DictType[Type["ModelManager"], "ModelManager"] = {}
+    _instances: ClassVar[DictType[Type["ModelManager"], "ModelManager"]] = {}
 
     @classmethod
     def instance(cls) -> "ModelManager":
@@ -287,7 +287,7 @@ class ModelManager(Atom, Generic[T]):
     def _default_database(self) -> Any:
         raise NotImplementedError
 
-    def __get__(self, obj: T, cls: Optional[Type[T]] = None) -> "ModelManager[T]":
+    def __get__(self, obj: T, cls: Optional[Type[T]] = None):
         """Handle objects from the class that oType[wns the manager. Subclasses
         should override this as needed.
 
@@ -360,10 +360,10 @@ class Model(Atom, metaclass=ModelMeta):
     # --------------------------------------------------------------------------
 
     #: ID of this object in the database. Subclasses can redefine this as needed
-    _id = Bytes()
+    _id = Bytes()  # type: Any
 
     #: A unique ID used to handle cyclical serialization and deserialization
-    __ref__ = Bytes(factory=lambda: b"%0x" % getrandbits(30 * 4))
+    __ref__ = Bytes(factory=lambda: b"%0x" % getrandbits(30 * 4))  # type: Any
 
     #: Flag to indicate if this model has been restored or saved
     __restored__ = Bool().tag(store=False)
@@ -508,14 +508,16 @@ class Model(Atom, metaclass=ModelMeta):
 
 
 class JSONSerializer(ModelSerializer):
-    def flatten(self, v, scope=None):
+    def flatten(self, v: Any, scope: Optional[ScopeType] = None):
         """Flatten date, datetime, time, decimal, and bytes as a dict with
         a __py__ field and arguments to reconstruct it. Also see the coercers
 
         """
         if isinstance(v, (date, datetime, time)):
             # This is inefficient space wise but still allows queries
-            s = {"__py__": f"{v.__class__.__module__}.{v.__class__.__name__}"}
+            s: DictType[str, Any] = {
+                "__py__": f"{v.__class__.__module__}.{v.__class__.__name__}"
+            }
             if isinstance(v, (date, datetime)):
                 s.update({"year": v.year, "month": v.month, "day": v.day})
             if isinstance(v, (time, datetime)):
@@ -537,7 +539,7 @@ class JSONSerializer(ModelSerializer):
             return {"__py__": "uuid", "id": str(v)}
         return super().flatten(v, scope)
 
-    def flatten_object(self, obj, scope):
+    def flatten_object(self, obj: Model, scope: ScopeType) -> DictType[str, Any]:
         """Flatten to just json but add in keys to know how to restore it."""
         ref = obj.__ref__
         if ref in scope:
@@ -546,13 +548,11 @@ class JSONSerializer(ModelSerializer):
             scope[ref] = obj
         state = obj.__getstate__(scope)
         _id = state.get("_id")
-        return (
-            {"_id": _id, "__ref__": ref, "__model__": state["__model__"]}
-            if _id
-            else state
-        )
+        if _id:
+            return {"_id": _id, "__ref__": ref, "__model__": state["__model__"]}
+        return state
 
-    async def get_object_state(self, obj, state, scope):
+    async def get_object_state(self, obj: Any, state: StateType, scope: ScopeType):
         """State should be contained in the dict"""
         return state
 
@@ -571,4 +571,4 @@ class JSONModel(Model):
     #: JSON cannot encode bytes
     _id = Str()
     __ref__ = Str(factory=lambda: (b"%0x" % getrandbits(30 * 4)).decode())
-    __restored__ = set_default(True)
+    __restored__ = set_default(True)  # type: ignore

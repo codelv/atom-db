@@ -32,6 +32,7 @@ from typing import (
     Sequence,
     Generic,
     TypeVar,
+    cast,
 )
 from atom import api
 from atom.atom import AtomMeta
@@ -47,6 +48,7 @@ from atom.api import (
     Property,
     Str,
     ForwardInstance,
+    ForwardSubclass,
     Value,
     Bool,
     List,
@@ -167,14 +169,14 @@ class Relation(ContainerList):
     __slots__ = ("_to",)
 
     def __init__(self, item: CallableType[[], Type[Model]], default=None):
-        super().__init__(ForwardInstance(item), default=None)
+        super().__init__(ForwardInstance(item), default=default)  # type: ignore
         self._to = None
 
-    def resolve(self) -> Member:
+    def resolve(self) -> Type[Model]:
         return self.to
 
     @property
-    def to(self) -> Member:
+    def to(self) -> Type[Model]:
         to = self._to
         if not to:
             to = self._to = resolve_member_type(self.validate_mode[-1])
@@ -182,12 +184,12 @@ class Relation(ContainerList):
 
 
 def py_type_to_sql_column(
-    model: Model, member: Member, cls: Type, **kwargs
+    model: Type[Model], member: Member, cls: Type, **kwargs
 ) -> TypeEngine:
     """Convert the python type to an alchemy table column type"""
     if issubclass(cls, JSONModel):
         return sa.JSON(**kwargs)
-    elif issubclass(cls, Model):
+    elif issubclass(cls, SQLModel):
         name = f"{cls.__model__}.{cls.__pk__}"
         cls.__backrefs__.add((model, member))
 
@@ -238,12 +240,12 @@ def resolve_member_type(member: Member) -> Any:
 
     """
     if hasattr(member, "resolve"):
-        return member.resolve()
+        return member.resolve()  # type: ignore
     return member.validate_mode[-1]
 
 
 def resolve_member_column(
-    model: "SQLModel", field: str, related_clauses: Optional[ListType[str]] = None
+    model: Type["SQLModel"], field: str, related_clauses: Optional[ListType[str]] = None
 ) -> sa.Column:
     """Get the sqlalchemy column for the given model and field.
 
@@ -292,7 +294,7 @@ def resolve_member_column(
             field = m.metadata.get("name", field)
         if isinstance(m, Relation):
             # Support looking up columns through a relation by the pk
-            model = m.to
+            model = m.to  # type: ignore
 
             # Add the through table to the related clauses if needed
             if related_clauses is not None and field not in related_clauses:
@@ -307,23 +309,25 @@ def resolve_member_column(
     return col
 
 
-def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> TypeEngine:
+def atom_member_to_sql_column(
+    model: Type["SQLModel"], member: Member, **kwargs
+) -> TypeEngine:
     """Convert the atom member type to an sqlalchemy table column type
     See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
 
     """
     if hasattr(member, "get_column_type"):
         # Allow custom members to define the column type programatically
-        return member.get_column_type(model)
+        return member.get_column_type(model)  # type: ignore
     elif isinstance(member, api.Str):
         return sa.String(**kwargs)
-    elif hasattr(api, "Unicode") and isinstance(member, api.Unicode):
-        return sa.Unicode(**kwargs)
+    elif hasattr(api, "Unicode") and isinstance(member, api.Unicode):  # type: ignore
+        return sa.Unicode(**kwargs)  # type: ignore
     elif isinstance(member, api.Bool):
         return sa.Boolean()
     elif isinstance(member, api.Int):
         return sa.Integer()
-    elif hasattr(api, "Long") and isinstance(member, api.Long):
+    elif hasattr(api, "Long") and isinstance(member, api.Long):  # type: ignore
         return sa.BigInteger()
     elif isinstance(member, api.Float):
         return sa.Float()
@@ -335,7 +339,7 @@ def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> TypeEng
         return sa.Float()
     elif isinstance(member, api.Enum):
         return sa.Enum(*member.items, name=member.name)
-    elif hasattr(api, "IntEnum") and isinstance(member, api.IntEnum):
+    elif hasattr(api, "IntEnum") and isinstance(member, api.IntEnum):  # type: ignore
         return sa.SmallInteger()
     elif isinstance(member, FK_TYPES):
         value_type = resolve_member_type(member)
@@ -379,7 +383,7 @@ def atom_member_to_sql_column(model: Model, member: Member, **kwargs) -> TypeEng
     )
 
 
-def create_table_column(model: Model, member: Member) -> sa.Column:
+def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
     """Converts an Atom member into a sqlalchemy data type.
 
     Parameters
@@ -434,7 +438,7 @@ def create_table_column(model: Model, member: Member) -> sa.Column:
     return sa.Column(column_name, *args, **kwargs)
 
 
-def create_table(model: "SQLModel", metadata: sa.MetaData) -> sa.Table:
+def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
     """Create an sqlalchemy table by inspecting the Model and generating
     a column for each member.
 
@@ -545,7 +549,7 @@ class SQLModelSerializer(ModelSerializer):
         return registry
 
 
-class SQLModelManager(ModelManager, Generic[T]):
+class SQLModelManager(ModelManager):
     """Manages models via aiopg, aiomysql, or similar libraries supporting
     SQLAlchemy tables. It stores a table for each class and when accessed
     on a Model subclass it returns a table proxy binding.
@@ -579,7 +583,9 @@ class SQLModelManager(ModelManager, Generic[T]):
             tables[cls] = table
         return tables
 
-    def __get__(self, obj: T, cls: Optional[Type[T]] = None) -> "SQLTableProxy[T]":
+    def __get__(
+        self, obj: T, cls: Optional[Type[T]] = None
+    ) -> Union["SQLTableProxy[T]", "SQLModelManager"]:
         """Retrieve the table for the requested object or class."""
         cls = cls or obj.__class__
         if not issubclass(cls, Model):
@@ -616,10 +622,10 @@ class ConnectionProxy(Atom):
 
 class SQLTableProxy(Atom, Generic[T]):
     #: Table this is a proxy to
-    table = Instance(sa.Table)
+    table = Instance(sa.Table, optional=False)
 
     #: Model which owns the table
-    model = Subclass(Model)
+    model = ForwardSubclass(lambda: SQLModel)
 
     #: Cache of pk: obj using weakrefs
     cache = Typed(weakref.WeakValueDictionary, ())
@@ -791,18 +797,19 @@ class SQLTableProxy(Atom, Generic[T]):
 
         """
         connection = state.pop(self.connection_kwarg, None)
-        obj = self.model(**state)
+        obj = cast(T, self.model(**state))
         await obj.save(force_insert=True, connection=connection)
         return obj
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         """All other fields are delegated to the query set"""
-        return getattr(SQLQuerySet(proxy=self), name)
+        qs: SQLQuerySet[T] = SQLQuerySet(proxy=self)
+        return getattr(qs, name)
 
 
 class SQLQuerySet(Atom, Generic[T]):
     #: Proxy
-    proxy = Instance(SQLTableProxy)
+    proxy = Instance(SQLTableProxy, optional=False)
     connection = Value()
 
     filter_clauses = List()
@@ -832,6 +839,7 @@ class SQLQuerySet(Atom, Generic[T]):
             from_table = p.table
             for part in clause.split("__"):
                 m = members.get(part)
+                assert m is not None
                 rel_model = resolve_member_type(m)
                 table = rel_model.objects.table
                 from_table = sa.join(from_table, table, isouter=outer_join)
@@ -958,7 +966,7 @@ class SQLQuerySet(Atom, Generic[T]):
             distinct_clauses=distinct_clauses, related_clauses=related_clauses
         )
 
-    def filter(self, *args, **kwargs):
+    def filter(self, *args, **kwargs: DictType[str, Any]):
         """Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
 
@@ -999,10 +1007,10 @@ class SQLQuerySet(Atom, Generic[T]):
 
             # Support lookups by model
             if isinstance(v, Model):
-                v = v.serializer.flatten_object(v, scope=None)
+                v = v.serializer.flatten_object(v, scope={})
             elif op in ("in", "notin"):
                 # Flatten lists when using in or notin ops
-                v = model.serializer.flatten(v, scope=None)
+                v = model.serializer.flatten(v, scope={})
 
             clause = getattr(col, QUERY_OPS[op])(v)
             filter_clauses.append(clause)
@@ -1143,7 +1151,7 @@ class SQLQuerySet(Atom, Generic[T]):
         q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
-        return [await restore(row) for row in cursor]
+        return [cast(T, await restore(row)) for row in cursor]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
         if args or kwargs:
@@ -1152,7 +1160,7 @@ class SQLQuerySet(Atom, Generic[T]):
         row = await self.proxy.fetchone(q, connection=self.connection)
         if row is None:
             return None
-        return await self.proxy.model.restore(row)
+        return cast(T, await self.proxy.model.restore(row))
 
 
 class SQLBinding(Atom):
@@ -1313,7 +1321,7 @@ class SQLModel(Model, metaclass=SQLMeta):
     __pk__: ClassVar[str]
 
     #: Models which link back to this
-    __backrefs__: ClassVar[SetType[TupleType[Type["SQLModel"], Member]]]
+    __backrefs__: ClassVar[SetType[TupleType[Type["Model"], Member]]]
 
     #: List of fields which have been tagged with a different column name
     __renamed_fields__: ClassVar[DictType[str, str]]
@@ -1366,7 +1374,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         return obj
 
     async def __restorestate__(
-        self, state: StateType, scope: Optional[ScopeType] = None
+        self: T, state: StateType, scope: Optional[ScopeType] = None
     ):
         # Holds cleaned state extracted for this model which may come from
         # a DB row using labels or renamed columns
@@ -1379,7 +1387,8 @@ class SQLModel(Model, metaclass=SQLMeta):
             # Convert row to dict because it speeds up lookups
             state = dict(state)
             # Convert the joined tables into nested states
-            table_name = self.__table__.name
+            table = self.objects.table
+            table_name = table.name
             pk = state[pk_label]
 
             # Pull known
@@ -1462,7 +1471,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         await super().__restorestate__(cleaned_state, scope)
 
     async def load(
-        self,
+        self: T,
         connection=None,
         reload: bool = False,
         fields: Optional[Sequence[str]] = None,
@@ -1497,7 +1506,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         await self.__restorestate__(state)
 
     async def save(
-        self,
+        self: T,
         force_insert: bool = False,
         force_update: bool = False,
         update_fields: Optional[Sequence[str]] = None,
@@ -1579,13 +1588,13 @@ class SQLModel(Model, metaclass=SQLMeta):
             self.__restored__ = True
             return r
 
-    async def delete(self, connection=None):
+    async def delete(self: T, connection=None):
         """Alias to delete this object in the database"""
         pk = self._id
         if not pk:
             return
         db = self.objects
-        table = db.table
+        table = db.table  # type: sa.Table
         q = table.delete().where(table.c[self.__pk__] == pk)
         async with db.connection(connection) as conn:
             r = await conn.execute(q)
