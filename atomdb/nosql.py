@@ -113,7 +113,7 @@ class NoSQLModel(Model):
     """
 
     #: ID of this object in the database
-    _id = Instance(bson.ObjectId)
+    _id = Instance(bson.ObjectId)  # type: ignore
 
     #: Handles encoding and decoding
     serializer = NoSQLModelSerializer.instance()
