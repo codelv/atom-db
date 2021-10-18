@@ -1303,6 +1303,8 @@ class SQLMeta(ModelMeta):
         # Cache the mapping of any renamed fields
         renamed_fields = cls.__renamed_fields__ = {}
         for old_name, member in cls.members().items():
+            if old_name in excluded_fields:
+                continue  # Ignore excluded fields
             if member.metadata:
                 new_name = member.metadata.get("name")
                 if new_name is not None:
