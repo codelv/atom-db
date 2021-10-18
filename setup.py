@@ -21,7 +21,7 @@ setup(
     license="MIT",
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
-    requires=['atom'],
+    requires=['atom>=0.7.0'],
     python_requires='>=3.7',
     install_requires=['atom'],
     optional_requires=[
