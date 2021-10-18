@@ -35,7 +35,7 @@ class AbstractUser(SQLModel):
 
 
 class User(AbstractUser):
-    id = Typed(int).tag(primary_key=True)
+    id = Typed(int).tag(primary_key=True, name="user_id")
     name = Str().tag(length=200)
     active = Bool()
     age = Int()

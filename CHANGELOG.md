@@ -2,6 +2,7 @@
 
 - Add type hints
 - Drop python 3.6 support
+- Fix bug with renamed fields excluded fields
 
 # 0.5.8
 
