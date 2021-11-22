@@ -163,10 +163,10 @@ class Relation(ContainerList):
     """A member which serves as a fk relation backref"""
 
     __slots__ = ("_to",)
-    _to: Optional[Type[Model]] = None
 
     def __init__(self, item: CallableType[[], Type[Model]], default=None):
         super().__init__(ForwardInstance(item), default=default)  # type: ignore
+        self._to: Optional[Type[Model]] = None
 
     def resolve(self) -> Type[Model]:
         return self.to
