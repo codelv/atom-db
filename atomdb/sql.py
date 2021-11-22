@@ -167,10 +167,10 @@ class Relation(ContainerList):
     """A member which serves as a fk relation backref"""
 
     __slots__ = ("_to",)
+    _to: Optional[Type[Model]]
 
     def __init__(self, item: CallableType[[], Type[Model]], default=None):
         super().__init__(ForwardInstance(item), default=default)  # type: ignore
-        self._to = None
 
     def resolve(self) -> Type[Model]:
         return self.to
@@ -178,15 +178,25 @@ class Relation(ContainerList):
     @property
     def to(self) -> Type[Model]:
         to = self._to
-        if not to:
-            to = self._to = resolve_member_type(self.validate_mode[-1])
+        if to is None:
+            types = resolve_member_types(self.validate_mode[-1])
+            assert types is not None
+            to = self._to = types[0]
         return to
 
 
 def py_type_to_sql_column(
-    model: Type[Model], member: Member, cls: Type, **kwargs
+    model: Type[Model],
+    member: Member,
+    types: Union[Type, TupleType[Type, ...]],
+    **kwargs,
 ) -> TypeEngine:
     """Convert the python type to an alchemy table column type"""
+    if isinstance(types, tuple):
+        cls, *subtypes = types
+    else:
+        cls = types
+
     if issubclass(cls, JSONModel):
         return sa.JSON(**kwargs)
     elif issubclass(cls, SQLModel):
@@ -225,7 +235,7 @@ def py_type_to_sql_column(
     )
 
 
-def resolve_member_type(member: Member) -> Any:
+def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
     """Determine the type specified on a member to determine ForeignKey
     relations.
 
@@ -235,13 +245,17 @@ def resolve_member_type(member: Member) -> Any:
         The member to retrieve the type from
     Returns
     -------
-    object: Model or object
-        The type specified.
+    types: Optional[Tuple[Model or object, ..]]
+        The member types.
 
     """
     if hasattr(member, "resolve"):
-        return member.resolve()  # type: ignore
-    return member.validate_mode[-1]
+        types = member.resolve()  # type: ignore
+    else:
+        types = member.validate_mode[-1]
+    if types is None or isinstance(types, tuple):
+        return types
+    return (types,)
 
 
 def resolve_member_column(
@@ -281,9 +295,10 @@ def resolve_member_column(
             m = rel_model.members().get(part)
             if m is None:
                 raise ValueError("Invalid field %s on %s" % (path, model))
-            rel_model = resolve_member_type(m)
-            if rel_model is None:
+            rel_model_types = resolve_member_types(m)
+            if rel_model_types is None:
                 raise ValueError("Invalid field %s on %s" % (path, model))
+            rel_model = rel_model_types[0]
         model = rel_model
 
     # Lookup the member
@@ -342,7 +357,7 @@ def atom_member_to_sql_column(
     elif hasattr(api, "IntEnum") and isinstance(member, api.IntEnum):  # type: ignore
         return sa.SmallInteger()
     elif isinstance(member, FK_TYPES):
-        value_type = resolve_member_type(member)
+        value_type = resolve_member_types(member)
         if value_type is None:
             raise TypeError("Instance and Typed members must specify types")
         return py_type_to_sql_column(model, member, value_type, **kwargs)
@@ -353,7 +368,7 @@ def atom_member_to_sql_column(
             raise TypeError("Relation members must specify types")
 
         # Resolve the item type
-        value_type = resolve_member_type(item_type)
+        value_type = resolve_member_types(item_type)
         if value_type is None:
             raise TypeError("Relation members must specify types")
         return None  # Relations are just syntactic sugar
@@ -363,10 +378,10 @@ def atom_member_to_sql_column(
             raise TypeError("List and Tuple members must specify types")
 
         # Resolve the item type
-        value_type = resolve_member_type(item_type)
+        value_type = resolve_member_types(item_type)
         if value_type is None:
             raise TypeError("List and Tuple members must specify types")
-        if issubclass(value_type, JSONModel):
+        if issubclass(value_type[0], JSONModel):
             return sa.JSON(**kwargs)
         t = py_type_to_sql_column(model, member, value_type, **kwargs)
         if isinstance(t, tuple):
@@ -840,7 +855,10 @@ class SQLQuerySet(Atom, Generic[T]):
             for part in clause.split("__"):
                 m = members.get(part)
                 assert m is not None
-                rel_model = resolve_member_type(m)
+                rel_model_types = resolve_member_types(m)
+                assert rel_model_types is not None
+                rel_model = rel_model_types[0]
+                assert issubclass(rel_model, Model)
                 table = rel_model.objects.table
                 from_table = sa.join(from_table, table, isouter=outer_join)
                 tables.append(table)
@@ -1400,7 +1418,9 @@ class SQLModel(Model, metaclass=SQLMeta):
                 field_label = f"{table_name}_{field_name}"
 
                 if isinstance(m, FK_TYPES):
-                    RelModel = resolve_member_type(m)
+                    RelModelTypes = resolve_member_types(m)
+                    assert RelModelTypes is not None
+                    RelModel = RelModelTypes[0]
                     if issubclass(RelModel, SQLModel):
                         # If the related model was joined, the pk field should
                         # exist so automatically restore that as well
@@ -1456,7 +1476,9 @@ class SQLModel(Model, metaclass=SQLMeta):
 
                 # Attempt to lookup related fields from the cache
                 if v is not None and isinstance(m, FK_TYPES):
-                    RelModel = resolve_member_type(m)
+                    RelModelTypes = resolve_member_types(m)
+                    assert RelModelTypes is not None
+                    RelModel = RelModelTypes[0]
                     if issubclass(RelModel, SQLModel):
                         cache = RelModel.objects.cache
                         obj = cache.get(v)
