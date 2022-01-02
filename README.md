@@ -79,7 +79,7 @@ attribute of the class to get the name of the primary key member.
 ##### Table metadata
 
 Like in Django a nested `Meta` class  can be added to specify the `db_name`,
-`unique_together`, and `constraints`.
+`unique_together`, `composite indexes` and `constraints`.
 
 If no `db_name` is specified on a Meta class, the table name defaults the what
 is set in the `__model__` member. This defaults to the qualname of the class,
@@ -95,6 +95,25 @@ class SomeModel(SQLModel):
         db_table = 'custom_table_name'
 
 ```
+
+
+
+`composite indexes` must be a list of each composite index description. See [sqlachemy's Index](https://docs.sqlalchemy.org/en/14/core/constraints.html#sqlalchemy.schema.Index) for index tuple description.
+
+First element is the index name. If `None`, the name will be auto-generated according the convention. Followings elements are columns table. Order of columns matters.
+
+```python
+
+class SomeModel(SQLModel):
+    # ...
+
+    class Meta:
+        composite_indexes = [(None, 'a', 'b'), ('ìndex_b_c', 'b', 'c')]
+
+```
+
+In the exemple above, two composite indexes are created. The first is on columns 'a' and 'b' with name `ix_SomeModel_a_b`. The second one on columns 'b' and 'c' with name `ìndex_b_c`.
+
 
 ##### Table creation / dropping
 

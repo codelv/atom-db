@@ -74,12 +74,12 @@ QUERY_OPS = {
 
 # Fields supported on the django style Meta class of a model
 VALID_META_FIELDS = (
-    'db_table', 'unique_together', 'abstract', 'constraints', 'triggers'
+    'db_table', 'unique_together', 'abstract', 'constraints', 'triggers', 'composite_indexes'
 )
 
 # Constraint naming conventions
 CONSTRAINT_NAMING_CONVENTIONS = {
-    "ix": "ix_%(column_0_label)s",
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
     "uq": "uq_%(table_name)s_%(column_0_N_name)s",
     # Using "ck_%(table_name)s_%(constraint_name)s" is preferred but it causes
     # issues using Bool on mysql
@@ -430,6 +430,16 @@ def create_table(model, metadata):
             if not isinstance(constraints, (tuple, list)):
                 raise TypeError("Meta constraints must be a tuple or list")
             args.extend(constraints)
+
+        # Composite indexes
+        composite_indexes = getattr(meta, 'composite_indexes', None)
+        if composite_indexes is not None:
+            if not isinstance(composite_indexes, (tuple, list)):
+                raise TypeError("Meta composite_indexes must be a tuple or list")
+            for index in composite_indexes:
+                if not isinstance(index, (tuple, list)):
+                    raise TypeError("Index must be a tuple or list")
+                args.extend([schema.Index(*index)])
 
     # Create table
     table = sa.Table(name, metadata, *args)

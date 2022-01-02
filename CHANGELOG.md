@@ -1,3 +1,7 @@
+# 0.5.8
+
+- Add `composite_indexes` to Model Meta.
+
 # 0.5.7
 
 - Add `distinct` to queryset
