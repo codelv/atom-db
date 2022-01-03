@@ -120,7 +120,12 @@ QUERY_OPS = {
 
 # Fields supported on the django style Meta class of a model
 VALID_META_FIELDS = (
-    'db_table', 'unique_together', 'abstract', 'constraints', 'triggers', 'composite_indexes'
+    "db_table",
+    "unique_together",
+    "abstract",
+    "constraints",
+    "triggers",
+    "composite_indexes",
 )
 
 # Constraint naming conventions
@@ -503,7 +508,7 @@ def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
             args.extend(constraints)
 
         # Composite indexes
-        composite_indexes = getattr(meta, 'composite_indexes', None)
+        composite_indexes = getattr(meta, "composite_indexes", None)
         if composite_indexes is not None:
             if not isinstance(composite_indexes, (tuple, list)):
                 raise TypeError("Meta composite_indexes must be a tuple or list")
