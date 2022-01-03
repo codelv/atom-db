@@ -40,6 +40,7 @@ from atom.api import (
 from atom.atom import AtomMeta
 
 T = TypeVar("T")
+M = TypeVar("M", bound="Model")
 ScopeType = DictType[Union[str, bytes], Any]
 StateType = DictType[str, Any]
 logger = logging.getLogger("atomdb")
@@ -488,7 +489,7 @@ class Model(Atom, metaclass=ModelMeta):
     objects: ModelManager = ModelManager()
 
     @classmethod
-    async def restore(cls: Type[T], state: StateType, **kwargs: Any) -> T:
+    async def restore(cls: Type[M], state: StateType, **kwargs: Any) -> M:
         """Restore an object from the database state"""
         obj = cls.__new__(cls)
         await obj.__restorestate__(state)
