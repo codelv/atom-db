@@ -35,7 +35,6 @@ from typing import (
     cast,
 )
 from atom import api
-from atom.atom import AtomMeta
 from atom.api import (
     Atom,
     Member,
@@ -62,11 +61,11 @@ from .base import (
     ModelSerializer,
     Model,
     ModelMeta,
-    find_subclasses,
     JSONModel,
     JSONSerializer,
     ScopeType,
     StateType,
+    find_subclasses,
 )
 
 # kwargs reserved for sqlalchemy table columns
@@ -120,6 +119,7 @@ QUERY_OPS = {
 
 # Fields supported on the django style Meta class of a model
 VALID_META_FIELDS = (
+    "db_name",
     "db_table",
     "unique_together",
     "abstract",
@@ -595,7 +595,8 @@ class SQLModelManager(ModelManager):
     cache = Bool(True)
 
     def _default_metadata(self) -> sa.MetaData:
-        return sa.MetaData(SQLBinding(manager=self), naming_convention=self.conventions)
+        binding = SQLBinding(manager=self)
+        return sa.MetaData(binding, naming_convention=self.conventions)
 
     def create_tables(self) -> DictType[Type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
@@ -659,9 +660,15 @@ class SQLTableProxy(Atom, Generic[T]):
     #: Key used to pull the connection out of filter kwargs
     connection_kwarg = Str("connection")
 
+    #: Reference to the aiomysql or aiopg Engine
+    #: This is used to get a connection from the connection pool.
     @property
     def engine(self):
-        return self.table.bind.manager.database
+        """Retrieve the database engine."""
+        db = self.table.bind.manager.database
+        if isinstance(db, dict):
+            return db[self.model.__database__]
+        return db
 
     def connection(self, connection=None):
         """Create a new connection or the return given connection as an async
@@ -923,9 +930,8 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         outer_join = self.outer_join if outer_join is None else outer_join
-        return self.clone(
-            related_clauses=self.related_clauses + list(related), outer_join=outer_join
-        )
+        related_clauses = self.related_clauses + list(related)
+        return self.clone(related_clauses=related_clauses, outer_join=outer_join)
 
     def order_by(self, *args):
         """Order the query by the given fields.
@@ -1183,6 +1189,16 @@ class SQLQuerySet(Atom, Generic[T]):
         return [cast(T, await restore(row)) for row in cursor]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
+        """Get the first result matching the query. Unlike django this will
+        NOT raise an error if multiple objects would be returned or an entry
+        does not exist.
+
+        Returns
+        -------
+        model: Optional[Model]
+            The first entry matching the query
+
+        """
         if args or kwargs:
             return await self.filter(*args, **kwargs).get()
         q = self.query("select")
@@ -1207,7 +1223,11 @@ class SQLBinding(Atom):
 
     @property
     def dialect(self):
-        return self.manager.database.dialect
+        """Get the dialect of the database."""
+        db = self.manager.database
+        if isinstance(db, dict):
+            db = db["default"]
+        return db.dialect
 
     def schema_for_object(self, obj):
         return obj.schema
@@ -1247,7 +1267,11 @@ class SQLBinding(Atom):
         self.queue.append((object_, multiparams, params))
 
     async def wait(self):
-        engine = self.manager.database
+        db = self.manager.database
+        if isinstance(db, dict):
+            engine = db["default"]
+        else:
+            engine = db
         result = None
         async with engine.acquire() as conn:
             try:
@@ -1308,6 +1332,10 @@ class SQLMeta(ModelMeta):
             if db_table:
                 cls.__model__ = db_table
 
+            db_name = getattr(Meta, "db_name", None)
+            if db_name:
+                cls.__database__ = db_name
+
         # If this inherited from an abstract model but didn't specify
         # Meta info make the subclass not abstract unless it was redefined
         base_meta = getattr(cls, "Meta", None)
@@ -1363,6 +1391,10 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Reference to the sqlalchemy table backing this model
     __table__: ClassVar[Optional[sa.Table]]
 
+    #: Database name. If the `database` field of the manager is a dict
+    #: This field will be used to determine which engine to use.
+    __database__: ClassVar[str] = "default"
+
     #: If no other member is tagged with primary_key=True this is used
     _id = Typed(int).tag(store=True, primary_key=True)
 
@@ -1381,6 +1413,8 @@ class SQLModel(Model, metaclass=SQLMeta):
         the cache if it exists.
         """
         try:
+            # When sqlalchemy does a join the key will have a prefix
+            # of the database name
             pk = state[f"{cls.__model__}_{cls.__pk__}"]
         except KeyError:
             pk = state[cls.__pk__]

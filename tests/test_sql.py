@@ -225,7 +225,9 @@ async def db(event_loop):
 
     async with create_engine(**params) as engine:
         mgr = SQLModelManager.instance()
-        mgr.database = engine
+        mgr.database = {
+            'default': engine
+        }
         yield engine
 
 
@@ -286,7 +288,7 @@ async def test_query(db):
 
     # Create second user
     for i in range(10):
-        user = User(name=faker.name(), email=faker.email(), age=20, active=True)
+        user = User(name=f'name-{i}', email='email-{i}@example.com', age=20, active=True)
         await user.save()
 
     for user in await User.objects.all():

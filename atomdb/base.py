@@ -25,6 +25,7 @@ from decimal import Decimal
 from uuid import UUID
 from atom.api import (
     Atom,
+    AtomMeta,
     Member,
     Property,
     Instance,
@@ -37,7 +38,6 @@ from atom.api import (
     Bool,
     set_default,
 )
-from atom.atom import AtomMeta
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -53,6 +53,29 @@ def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
         classes.append(subclass)
         classes.extend(find_subclasses(subclass))
     return classes
+
+
+def is_db_field(m: Member) -> bool:
+    """Check if the member should be saved into the database.  Any member that
+    does not start with an underscore and is not tagged with `store=False`
+    is considered to be field to save into the database.
+
+    Parameters
+    ----------
+    m: Member
+        The atom member to check.
+
+    Returns
+    -------
+    result: bool
+        Whether the member should be saved into the database.
+
+    """
+    metadata = m.metadata
+    default = not m.name.startswith("_")
+    if metadata is not None:
+        return metadata.get("store", default)
+    return default
 
 
 class ModelSerializer(Atom):
@@ -150,7 +173,6 @@ class ModelSerializer(Atom):
         """
         unflatten = self.unflatten
         scope = scope or {}
-
         if isinstance(v, dict):
             # Circular reference
             ref = v.get("__ref__")
@@ -303,37 +325,16 @@ class ModelMeta(AtomMeta):
         # Fields that are saved in the db. By default it uses all atom members
         # that don't start with an underscore and are not taged with store.
         if "__fields__" not in dct:
-            fields = []
-            for name, m in cls.__atom_members__.items():
-                if meta.is_db_field(meta, m):
-                    fields.append(name)
-            cls.__fields__ = fields
+            cls.__fields__ = [
+                name for name, m in cls.members().items() if is_db_field(m)
+            ]
 
         # Model name used so the serializer knows what class to recreate
         # when restoring
         if "__model__" not in dct:
             cls.__model__ = f"{cls.__module__}.{cls.__name__}"
+
         return cls
-
-    def is_db_field(meta, m: Member) -> bool:
-        """Check if the member should be saved into the database.
-
-        Parameters
-        ----------
-        m: Member
-            The atom member to check.
-
-        Returns
-        -------
-        result: bool
-            Whether the
-
-        """
-        metadata = m.metadata
-        default = not m.name.startswith("_")
-        if metadata is not None:
-            return metadata.get("store", default)
-        return default
 
 
 class Model(Atom, metaclass=ModelMeta):

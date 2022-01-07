@@ -160,6 +160,9 @@ created it.
 Before accessing the DB you must assign a "database engine" to the manager's
 `database` member.
 
+> Note: As of `0.6.2` you can also specify this as a dictionary to use multiple
+databases.
+
 ```python
 import os
 import re
@@ -185,6 +188,37 @@ mgr.database = engine
 
 This engine will then be used by the manager to execute queries.  You can
 retrieve the database engine from any Model by using `Model.objects.engine`.
+
+
+###### Multiple database
+
+If you need to use more than one database it looks like this.
+
+```python
+
+# Multiple databases
+mgr = SQLModelManager.instance()
+mgr.database = {
+    'default': await create_engine(**default_db_params),
+    'other': await create_engine(**other_db_params),
+}
+
+```
+
+To specify which database is used either using the `__database__` class field
+or specify it as the `db_name` on the model Meta.
+
+```python
+
+class ExternalData(SQLModel):
+
+    # ... fields
+    class Meta:
+        db_name = 'other'
+        db_table = 'external_data'
+
+
+```
 
 
 #### Django style queries

@@ -1,3 +1,11 @@
+# 0.6.2
+
+- Add support for using multiple databases
+
+# 0.6.1
+
+- Merge `composite_indexes` and typing branches
+
 # 0.6.0
 
 - Add type hints
