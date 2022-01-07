@@ -3,14 +3,10 @@ import os
 import re
 import pytest
 import random
-import atomdb.sql
-import sqlalchemy as sa
-from atom.api import *
-from atomdb.sql import JSONModel, SQLModel, SQLModelManager, Relation
+
 from decimal import Decimal
 from datetime import datetime, date, time, timedelta
 from faker import Faker
-from pprint import pprint
 
 faker = Faker()
 
@@ -19,10 +15,18 @@ if 'DATABASE_URL' not in os.environ:
 
 DATABASE_URL = os.environ['DATABASE_URL']
 
-if DATABASE_URL.startswith('mysql'):
-    from pymysql.err import IntegrityError
-else:
-    from psycopg2.errors import UniqueViolation as IntegrityError
+try:
+    import atomdb.sql
+    import sqlalchemy as sa
+    from atom.api import *
+    from atomdb.sql import JSONModel, SQLModel, SQLModelManager, Relation
+    if DATABASE_URL.startswith('mysql'):
+        from pymysql.err import IntegrityError
+    else:
+        from psycopg2.errors import UniqueViolation as IntegrityError
+except ImportError as e:
+    pytest.skip("aiomysql and aiopg not available", allow_module_level=True)
+
 IS_MYSQL = DATABASE_URL.startswith('mysql')
 
 
@@ -212,6 +216,9 @@ async def db(event_loop):
         if os.path.exists(db):
             os.remove(db)
     else:
+        if schema == 'postgres':
+            params['database'] = 'postgres'
+
         async with connect(**params) as conn:
             async with conn.cursor() as c:
                 # WARNING: Not safe
@@ -221,7 +228,7 @@ async def db(event_loop):
     if schema == 'mysql':
         params['db'] = db
     elif schema == 'postgres':
-        params['dbname'] = db
+        params['database'] = db
 
     async with create_engine(**params) as engine:
         mgr = SQLModelManager.instance()

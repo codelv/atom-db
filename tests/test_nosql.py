@@ -1,10 +1,15 @@
+import os
 import pytest
-import atomdb.nosql
 from atom.api import *
-from atomdb.nosql import NoSQLModel, NoSQLModelManager
 from faker import Faker
-from motor.motor_asyncio import AsyncIOMotorClient
 from pprint import pprint
+
+try:
+    import atomdb.nosql
+    from atomdb.nosql import NoSQLModel, NoSQLModelManager
+    from motor.motor_asyncio import AsyncIOMotorClient
+except ImportError:
+    pytest.skip("mongo/motor is not available", allow_module_level=True)
 
 
 faker = Faker()
@@ -44,11 +49,15 @@ class Comment(NoSQLModel):
 
 @pytest.yield_fixture()
 def db(event_loop):
-    client = AsyncIOMotorClient(io_loop=event_loop)
+    MONGO_URL = os.environ.get('MONGO_URL', None)
+    if MONGO_URL:
+        client = AsyncIOMotorClient(MONGO_URL, io_loop=event_loop)
+    else:
+        client = AsyncIOMotorClient(io_loop=event_loop)
     db = client.enaml_web_test_db
     mgr = NoSQLModelManager.instance()
     mgr.database = db
-    mgr.proxies = {} # Flush the db cache
+    mgr.proxies = {}  # Flush the db cache
     yield db
 
 
