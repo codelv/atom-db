@@ -1,6 +1,7 @@
 # 0.6.2
 
 - Add support for using multiple databases
+- Fix non-abstract subclasses throwing multiple primary key error.
 
 # 0.6.1
 

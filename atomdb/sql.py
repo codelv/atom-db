@@ -1291,15 +1291,16 @@ class SQLMeta(ModelMeta):
 
         members = cls.members()
 
-        # If a pk field is defined use that insetad of _id
+        # If a pk field is defined use that instead of _id
         pk = None
-        for m in members.values():
-            if m.name == "_id":
+        for name, m in members.items():
+            if name == "_id":
                 continue
             if m.metadata and m.metadata.get("primary_key"):
                 if pk is not None:
                     raise NotImplementedError(
-                        "Using multiple primary keys is not yet supported."
+                        "Using multiple primary keys is not yet supported. "
+                        f"Both {pk.name} and {name} are marked as primary."
                     )
                 pk = m
 

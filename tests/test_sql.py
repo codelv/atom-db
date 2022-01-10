@@ -170,6 +170,25 @@ def test_custom_table_name():
     assert Test.objects.table.name == table_name
 
 
+def test_table_subclass():
+    # Test that a non-abstract table can be subclassed
+    class Base(SQLModel):
+        class Meta:
+            abstract = True
+
+    class A(Base):
+        id = Int().tag(primary_key=True)
+
+        class Meta:
+            db_table = 'test_a'
+
+    class B(A):
+        extra_col = Dict()
+
+        class Meta:
+            db_table = 'test_b'
+
+
 async def reset_tables(*models):
     for Model in models:
         try:
