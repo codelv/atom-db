@@ -2,6 +2,7 @@
 
 - Add support for using multiple databases
 - Fix non-abstract subclasses throwing multiple primary key error.
+- Make update work with renamed fields
 
 # 0.6.1
 

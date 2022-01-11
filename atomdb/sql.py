@@ -1171,6 +1171,13 @@ class SQLQuerySet(Atom, Generic[T]):
         return await self.proxy.execute(q, connection=self.connection)
 
     async def update(self, **values):
+        """ Perform an update of the given values.
+
+        """
+        # Translate any renamed fields back to the database value
+        for py_name, db_name in self.proxy.model.__renamed_fields__.items():
+            if py_name in values:
+                values[db_name] = values.pop(py_name)
         q = self.query("update").values(**values)
         return await self.proxy.execute(q, connection=self.connection)
 
@@ -1402,6 +1409,7 @@ class SQLModel(Model, metaclass=SQLMeta):
     __backrefs__: ClassVar[SetType[TupleType[Type["Model"], Member]]]
 
     #: List of fields which have been tagged with a different column name
+    #: Mapping is class attr -> database column name.
     __renamed_fields__: ClassVar[DictType[str, str]]
 
     #: Set of fields to exclude from the database
@@ -1630,8 +1638,8 @@ class SQLModel(Model, metaclass=SQLMeta):
             state.pop(f, None)
 
         # Replace any renamed fields
-        for old_name, new_name in self.__renamed_fields__.items():
-            state[new_name] = state.pop(old_name)
+        for py_name, db_name in self.__renamed_fields__.items():
+            state[db_name] = state.pop(py_name)
 
         table = db.table
         async with db.connection(connection) as conn:

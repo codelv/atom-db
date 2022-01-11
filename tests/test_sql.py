@@ -121,11 +121,11 @@ class Page(SQLModel):
         related = List(ForwardInstance(lambda: Page)).tag(nullable=True)
         tags = List(str)
 
-    rating = Float()
     visits = BigInt()
     date = Instance(date)
     last_updated = Instance(datetime)
     rating = Instance(Decimal)
+    ranking = Float().tag(name="order")
 
     # A bit verbose but provides a custom column specification
     data = Instance(object).tag(column=sa.Column('data', sa.LargeBinary()))
@@ -727,6 +727,23 @@ async def test_update(db):
     assert await User.objects.filter(active=False).count() == 0
     r = await User.objects.filter(name="Bob").update(active=False)
     assert await User.objects.filter(active=False).count() == 2
+
+
+@pytest.mark.asyncio
+async def test_update_renamed(db):
+    """ Make sure update takes account for any renamed columns
+
+    """
+    await reset_tables(User, Page)
+
+    await Page.objects.create(title="Test1", status="live", ranking=100)
+    await Page.objects.create(title="Test2", status="live", ranking=100)
+    await Page.objects.create(title="Test3", status="live", ranking=1)
+
+    assert await Page.objects.filter(ranking=100).count() == 2
+    await Page.objects.filter(ranking=100).update(ranking=3)
+    assert await Page.objects.filter(ranking=100).count() == 0
+    assert await Page.objects.filter(ranking=3).count() == 2
 
 
 @pytest.mark.asyncio
