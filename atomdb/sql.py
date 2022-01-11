@@ -1291,11 +1291,14 @@ class SQLMeta(ModelMeta):
 
         members = cls.members()
 
-        # If a pk field is defined use that instead of _id
-        pk = None
-        for name, m in members.items():
-            if name == "_id":
+        # If a member tagged with primary_key=True is defined,
+        # on this class, use that as the primary key and reassign
+        # the _id member to alias the new primary key.
+        pk: Optional[Member] = None
+        for name, m in dct.items():
+            if name == "_id" or not isinstance(m, Member):
                 continue
+
             if m.metadata and m.metadata.get("primary_key"):
                 if pk is not None:
                     raise NotImplementedError(
@@ -1304,13 +1307,28 @@ class SQLMeta(ModelMeta):
                     )
                 pk = m
 
-        if pk:
+        if pk is None:
+            pk = cls._id
+        else:
+            # Reassign the _id field to the primary key member.
             cls._id = pk
             members["_id"] = pk
+
+            # Remove "_id" from the fields list as it is now an alias
             cls.__fields__ = tuple((f for f in cls.__fields__ if f != "_id"))
 
+            # Check that the atom member indexes are still valid after
+            # reassinging to avoid a bug in the past.
+            member_indices = set()
+            for name, m in members.items():
+                if name == "_id":
+                    continue  # The _id is an alias
+                assert m.index not in member_indices
+                member_indices.add(m.index)
+
         # Set the pk name
-        cls.__pk__ = (cls._id.metadata or {}).get("name", cls._id.name)
+        assert pk is not None
+        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
 
         # Set to the sqlalchemy Table
         cls.__table__ = None
