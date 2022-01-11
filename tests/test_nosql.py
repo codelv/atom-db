@@ -22,7 +22,7 @@ class User(NoSQLModel):
     settings = Dict()
 
     def _default_settings(self):
-        return {'font-size': 16, 'theme': 'maroon'}
+        return {"font-size": 16, "theme": "maroon"}
 
 
 class Image(NoSQLModel):
@@ -32,7 +32,7 @@ class Image(NoSQLModel):
 
 class Page(NoSQLModel):
     title = Str()
-    status = Enum('preview', 'live')
+    status = Enum("preview", "live")
     body = Str()
     author = Instance(User)
     images = List(Image)
@@ -42,14 +42,14 @@ class Page(NoSQLModel):
 class Comment(NoSQLModel):
     page = Instance(Page)
     author = Instance(User)
-    status = Enum('pending', 'approved')
+    status = Enum("pending", "approved")
     body = Str()
     reply_to = ForwardInstance(lambda: Comment)
 
 
 @pytest.yield_fixture()
 def db(event_loop):
-    MONGO_URL = os.environ.get('MONGO_URL', None)
+    MONGO_URL = os.environ.get("MONGO_URL", None)
     if MONGO_URL:
         client = AsyncIOMotorClient(MONGO_URL, io_loop=event_loop)
     else:
@@ -68,6 +68,7 @@ async def test_db_manager(db):
     # Check non-model access, it should not return the collection
     class NotModel(Atom):
         objects = mgr
+
     assert NotModel.objects == mgr
 
     # Now change it
@@ -90,7 +91,7 @@ async def test_simple_save_restore_delete(db):
     assert user._id is not None
 
     # Restore
-    state = await User.objects.find_one({'name': user.name})
+    state = await User.objects.find_one({"name": user.name})
     assert state
 
     u = await User.restore(state)
@@ -104,7 +105,7 @@ async def test_simple_save_restore_delete(db):
     user.active = False
     await user.save()
 
-    state = await User.objects.find_one({'name': user.name})
+    state = await User.objects.find_one({"name": user.name})
     assert state
     u = await User.restore(state)
     assert not u.active
@@ -130,25 +131,28 @@ async def test_nested_save_restore(db):
     await Page.objects.drop()
     await Comment.objects.drop()
 
-    authors = [
-        User(name=faker.name(), active=True) for i in range(2)
-    ]
+    authors = [User(name=faker.name(), active=True) for i in range(2)]
     for a in authors:
         await a.save()
 
-    images = [
-        Image(name=faker.job(), path=faker.image_url()) for i in range(10)
-    ]
+    images = [Image(name=faker.job(), path=faker.image_url()) for i in range(10)]
 
     # Only save the first few, it should serialize the others
     for i in range(3):
         await images[i].save()
 
     pages = [
-        Page(title=faker.catch_phrase(), body=faker.text(), author=author,
-             images=[faker.random.choice(images) for j in range(faker.random.randint(0, 2))],
-             status=faker.random.choice(Page.status.items))
-        for i in range(4) for author in authors
+        Page(
+            title=faker.catch_phrase(),
+            body=faker.text(),
+            author=author,
+            images=[
+                faker.random.choice(images) for j in range(faker.random.randint(0, 2))
+            ],
+            status=faker.random.choice(Page.status.items),
+        )
+        for i in range(4)
+        for author in authors
     ]
     for p in pages:
         await p.save()
@@ -158,18 +162,22 @@ async def test_nested_save_restore(db):
         for i in range(faker.random.randint(1, 10)):
             commentor = User(name=faker.name())
             await commentor.save()
-            comment = Comment(author=commentor, page=p,
-                              status=faker.random.choice(Comment.status.items),
-                              reply_to=faker.random.choice([None]+comments),
-                              body=faker.text())
+            comment = Comment(
+                author=commentor,
+                page=p,
+                status=faker.random.choice(Comment.status.items),
+                reply_to=faker.random.choice([None] + comments),
+                body=faker.text(),
+            )
             comments.append(comment)
             await comment.save()
 
     for p in pages:
         # Find in db
-        state = await Page.objects.find_one({'author._id': p.author._id,
-                                             'title': p.title})
-        assert state, f'Couldnt find page by {p.title} by {p.author.name}'
+        state = await Page.objects.find_one(
+            {"author._id": p.author._id, "title": p.title}
+        )
+        assert state, f"Couldnt find page by {p.title} by {p.author.name}"
         r = await Page.restore(state)
         assert p._id == r._id
         assert p.author._id == r.author._id
@@ -178,11 +186,10 @@ async def test_nested_save_restore(db):
         for img_1, img_2 in zip(p.images, r.images):
             assert img_1.path == img_2.path
 
-        async for state in Comment.objects.find({'page._id': p._id}):
+        async for state in Comment.objects.find({"page._id": p._id}):
             comment = await Comment.restore(state)
             assert comment.page._id == p._id
-            async for state in Comment.objects.find({'reply_to._id':
-                                                         comment._id}):
+            async for state in Comment.objects.find({"reply_to._id": comment._id}):
                 reply = await Comment.restore(state)
                 assert reply.page._id == p._id
 
@@ -194,15 +201,14 @@ async def test_circular(db):
     await Page.objects.drop()
 
     p = Page(title=faker.catch_phrase(), body=faker.text())
-    related_page = Page(title=faker.catch_phrase(), body=faker.text(),
-                        related=[p])
+    related_page = Page(title=faker.catch_phrase(), body=faker.text(), related=[p])
 
     # Create a circular reference
     p.related = [related_page]
     await p.save()
 
     # Make sure it restores properly
-    state = await Page.objects.find_one({'_id': p._id})
+    state = await Page.objects.find_one({"_id": p._id})
     pprint(state)
     r = await Page.restore(state)
     assert r.title == p.title
@@ -215,9 +221,7 @@ async def test_load(db):
     # That an object can be loaded by setting the ID and calling load.
     await User.objects.drop()
 
-    authors = [
-        User(name=faker.name(), active=True) for i in range(2)
-    ]
+    authors = [User(name=faker.name(), active=True) for i in range(2)]
     for a in authors:
         await a.save()
 
@@ -233,6 +237,3 @@ async def test_load(db):
     user.__restored__ = False
     await user.load()
     assert user.name == authors[0].name
-
-
-

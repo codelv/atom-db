@@ -49,11 +49,11 @@ async def test_model():
         await m.delete()
 
     with pytest.raises(ValueError):
-        state = {'__model__': 'not.this.Model'}
+        state = {"__model__": "not.this.Model"}
         await AbstractModel.restore(state)
 
     # Old state fields do not blow up
     state = m.__getstate__()
-    state['removed_field'] = 'no-longer-exists'
-    state['rating'] = 3.5  # Type changed
+    state["removed_field"] = "no-longer-exists"
+    state["rating"] = 3.5  # Type changed
     obj = await AbstractModel.restore(state)

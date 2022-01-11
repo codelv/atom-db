@@ -1171,9 +1171,7 @@ class SQLQuerySet(Atom, Generic[T]):
         return await self.proxy.execute(q, connection=self.connection)
 
     async def update(self, **values):
-        """ Perform an update of the given values.
-
-        """
+        """Perform an update of the given values."""
         # Translate any renamed fields back to the database value
         for py_name, db_name in self.proxy.model.__renamed_fields__.items():
             if py_name in values:

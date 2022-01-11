@@ -54,7 +54,7 @@ async def test_json_dates():
 
 @pytest.mark.asyncio
 async def test_json_decimal():
-    d = Decimal('3.9')
+    d = Decimal("3.9")
     obj = Amount(total=d)
     state = obj.__getstate__()
     data = json.dumps(state)
@@ -73,7 +73,7 @@ async def test_json_nested():
 
 @pytest.mark.asyncio
 async def test_json_bytes():
-    obj = File(name="test.png", data=b'abc')
+    obj = File(name="test.png", data=b"abc")
     state = obj.__getstate__()
     data = json.dumps(state)
     r = await File.restore(json.loads(data))
@@ -82,8 +82,8 @@ async def test_json_bytes():
 
 @pytest.mark.asyncio
 async def test_json_list():
-    f1 = File(name="test.png", data=b'abc')
-    f2 = File(name="blueberry.jpg", data=b'123')
+    f1 = File(name="test.png", data=b"abc")
+    f2 = File(name="blueberry.jpg", data=b"123")
     obj = Page(files=[f1, f2])
     state = obj.__getstate__()
     data = json.dumps(state)
@@ -107,6 +107,6 @@ async def test_json_cyclical():
     data = json.dumps(state)
     print(data)
     r = await Tree.restore(json.loads(data))
-    assert r.name == 'a'
+    assert r.name == "a"
     assert r.related.name == b.name
     assert r.related.related == r
