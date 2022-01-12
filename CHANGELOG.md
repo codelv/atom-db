@@ -1,3 +1,7 @@
+# 0.6.3
+
+- Add workaround for subclassed pk handling
+
 # 0.6.2
 
 - Add support for using multiple databases

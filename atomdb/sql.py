@@ -1299,40 +1299,41 @@ class SQLMeta(ModelMeta):
         # If a member tagged with primary_key=True is defined,
         # on this class, use that as the primary key and reassign
         # the _id member to alias the new primary key.
-        pk: Optional[Member] = None
-        for name, m in dct.items():
-            if name == "_id" or not isinstance(m, Member):
+        pk: Member = cls._id
+        for name, m in members.items():
+            if name == "_id":
                 continue
-
             if m.metadata and m.metadata.get("primary_key"):
-                if pk is not None:
+                if pk.name != "_id" and m.name != pk.name:
                     raise NotImplementedError(
                         "Using multiple primary keys is not yet supported. "
-                        f"Both {pk.name} and {name} are marked as primary."
+                        f"Both {pk.name} and {m.name} are marked as primary."
                     )
                 pk = m
 
-        if pk is None:
-            pk = cls._id
-        else:
+        if pk is not cls._id:
+            # Workaround member index generation issue
+            # TODO: Remove this
+            old_index = cls._id.index
+            if old_index > 0 and pk.index != old_index:
+                pk.set_index(old_index)
+
             # Reassign the _id field to the primary key member.
-            cls._id = pk
-            members["_id"] = pk
+            cls._id = members["_id"] = pk
 
             # Remove "_id" from the fields list as it is now an alias
             cls.__fields__ = tuple((f for f in cls.__fields__ if f != "_id"))
 
-            # Check that the atom member indexes are still valid after
-            # reassinging to avoid a bug in the past.
-            member_indices = set()
-            for name, m in members.items():
-                if name == "_id":
-                    continue  # The _id is an alias
-                assert m.index not in member_indices
-                member_indices.add(m.index)
+        # Check that the atom member indexes are still valid after
+        # reassinging to avoid a bug in the past.
+        member_indices = set()
+        for name, m in members.items():
+            if name == "_id":
+                continue  # The _id is an alias
+            assert m.index not in member_indices
+            member_indices.add(m.index)
 
         # Set the pk name
-        assert pk is not None
         cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
 
         # Set to the sqlalchemy Table
