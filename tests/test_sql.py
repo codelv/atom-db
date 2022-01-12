@@ -177,6 +177,79 @@ def test_custom_table_name():
     assert Test.objects.table.name == table_name
 
 
+def test_sanity_pk_and_fields():
+    class A(SQLModel):
+        foo = Str()
+
+    assert A.__pk__ == '_id'
+    assert A.__fields__ == ['_id', 'foo']
+
+
+def test_sanity_pk_override():
+    class A(SQLModel):
+        id = Int().tag(primary_key=True)
+        foo = Str()
+
+    assert A._id.delegate is A.id
+    assert A.__pk__ == 'id'
+    assert A.__fields__ == ['id', 'foo']
+
+
+def test_sanity_pk_renamed():
+    class A(SQLModel):
+        id = Int().tag(primary_key=True, name="table_id")
+        foo = Str()
+
+    assert A._id.delegate is A.id
+    assert A.__pk__ == 'table_id'
+    assert A.__fields__ == ['id', 'foo']
+
+
+def test_sanity_relation_exluded():
+    class Child(SQLModel):
+        pass
+
+    class Parent(SQLModel):
+        children = Relation(lambda: Child)
+
+    assert "children" in Parent.__excluded_fields__
+
+
+@pytest.mark.asyncio
+async def test_sanity_flatten_unflatten():
+
+    async def unflatten_date(v: str, scope=None):
+        return datetime.strptime(v, "%Y-%m-%d").date()
+
+    def flatten_date(v: date, scope=None):
+        return v.strftime("%Y-%m-%d")
+
+    class TableOfUnformattedGarbage(SQLModel):
+        created = Instance(date).tag(
+            type=sa.String(length=10),
+            flatten=flatten_date,
+            unflatten=unflatten_date)
+
+    r = await TableOfUnformattedGarbage.restore({
+        '__model__': TableOfUnformattedGarbage.__model__,
+        '_id': 1,
+        'created': '2020-10-28',
+    })
+    assert r.created == date(2020, 10, 28)
+    assert r.__getstate__()['created'] == '2020-10-28'
+
+
+def test_sanity_renamed_fields():
+    class A(SQLModel):
+        some_field = Str().tag(name="SomeField")
+
+    class B(SQLModel):
+        other_field = Str()
+
+    A.__renamed_fields__ == {"some_field": "SomeField"}
+    B.__renamed_fields__ == {"some_field": "SomeField"}
+
+
 def test_table_subclass():
     # Test that a non-abstract table can be subclassed
     class Base(SQLModel):
@@ -189,11 +262,19 @@ def test_table_subclass():
         class Meta:
             db_table = "test_a"
 
+    assert A.__pk__ == 'id'
+    assert A.__model__ == "test_a"
+    assert A.__fields__ == ['id']
+
     class B(A):
         extra_col = Dict()
 
         class Meta:
             db_table = "test_b"
+
+    assert B.__pk__ == 'id'
+    assert B.__model__ == "test_b"
+    assert B.__fields__ == ['id', 'extra_col']
 
 
 async def reset_tables(*models):

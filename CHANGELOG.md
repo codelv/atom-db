@@ -1,3 +1,7 @@
+# 0.6.4
+
+- Use Delegator for overridden primary keys
+
 # 0.6.3
 
 - Add workaround for subclassed pk handling

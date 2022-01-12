@@ -38,6 +38,7 @@ from atom import api
 from atom.api import (
     Atom,
     Member,
+    Delegator,
     Subclass,
     ContainerList,
     Int,
@@ -250,6 +251,8 @@ def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
         The member types.
 
     """
+    if isinstance(member, Delegator):
+        member = member.delegate  # type: ignore
     if hasattr(member, "resolve"):
         types = member.resolve()  # type: ignore
     else:
@@ -392,6 +395,9 @@ def atom_member_to_sql_column(
         return sa.LargeBinary(**kwargs)
     elif isinstance(member, api.Dict):
         return sa.JSON(**kwargs)
+    elif isinstance(member, api.Delegator):
+        delegate = member.delegate  # type: ignore
+        return atom_member_to_sql_column(model, delegate, **kwargs)
     raise NotImplementedError(
         f"A column for {member.name} of {model} could not be determined "
         f"automatically, please specify it manually by tagging it "
@@ -1292,49 +1298,41 @@ class SQLMeta(ModelMeta):
     """Both the pk and _id are aliases to the primary key"""
 
     def __new__(meta, name, bases, dct):
-        cls = ModelMeta.__new__(meta, name, bases, dct)
+        attrs = dict(dct)
 
-        members = cls.members()
-
-        # If a member tagged with primary_key=True is defined,
-        # on this class, use that as the primary key and reassign
-        # the _id member to alias the new primary key.
-        pk: Member = cls._id
-        for name, m in members.items():
-            if name == "_id":
+        # If a member tagged with primary_key=True is not named "_id" make
+        # the _id member a Delegator to the new primary key.
+        pk_field = None
+        for k, v in dct.items():
+            if k == "_id" or not isinstance(v, Member):
                 continue
-            if m.metadata and m.metadata.get("primary_key"):
-                if pk.name != "_id" and m.name != pk.name:
+            if v.metadata and v.metadata.get("primary_key"):
+                if pk_field is not None:
                     raise NotImplementedError(
-                        "Using multiple primary keys is not yet supported. "
-                        f"Both {pk.name} and {m.name} are marked as primary."
+                        f"Using multiple primary keys is not yet supported. "
+                        f"Both {pk_field} and {k} are marked as primary keys."
                     )
-                pk = m
+                assert not isinstance(v, Delegator)
+                attrs["_id"] = Delegator(v)
+                pk_field = k
 
-        if pk is not cls._id:
-            # Workaround member index generation issue
-            # TODO: Remove this
-            old_index = cls._id.index
-            if old_index > 0 and pk.index != old_index:
-                pk.set_index(old_index)
+        cls = ModelMeta.__new__(meta, name, bases, attrs)
 
-            # Reassign the _id field to the primary key member.
-            cls._id = members["_id"] = pk
+        if pk_field is None:
+            pk_field = cls.__pk__
 
-            # Remove "_id" from the fields list as it is now an alias
-            cls.__fields__ = tuple((f for f in cls.__fields__ if f != "_id"))
+        pk: Member = cls._id
+        if isinstance(pk, Delegator):
+            # Remove "_id" from the fields list
+            if "_id" in cls.__fields__:
+                cls.__fields__.remove("_id")
+            pk = cls._id.delegate
 
-        # Check that the atom member indexes are still valid after
-        # reassinging to avoid a bug in the past.
-        member_indices = set()
-        for name, m in members.items():
-            if name == "_id":
-                continue  # The _id is an alias
-            assert m.index not in member_indices
-            member_indices.add(m.index)
+        if pk_field not in cls.__fields__:
+            cls.__fields__.insert(0, pk_field)
 
-        # Set the pk name
-        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
+        # Set the pk name to the database name.
+        cls.__pk__ = (pk.metadata or {}).get("name", pk_field)
 
         # Set to the sqlalchemy Table
         cls.__table__ = None
@@ -1401,8 +1399,8 @@ class SQLModel(Model, metaclass=SQLMeta):
 
     """
 
-    #: Primary key field name
-    __pk__: ClassVar[str]
+    #: Primary key field name. This should match the database primary key.
+    __pk__: ClassVar[str] = "_id"
 
     #: Models which link back to this
     __backrefs__: ClassVar[SetType[TupleType[Type["Model"], Member]]]
