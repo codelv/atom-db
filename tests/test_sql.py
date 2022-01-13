@@ -158,6 +158,7 @@ class Comment(SQLModel):
 
 
 class Email(SQLModel):
+    id = Int().tag(name="email_id", primary_key=True)
     to = Str().tag(length=120)
     from_ = Str().tag(name="from").tag(length=120)
     body = Str().tag(length=1024)
@@ -167,6 +168,9 @@ class Ticket(SQLModel):
     code = Str().tag(length=64, primary_key=True)
     desc = Str().tag(length=500)
 
+
+class ImportedTicket(Ticket):
+    meta = Dict()
 
 
 def test_build_tables():
@@ -541,6 +545,26 @@ async def test_query_pk(db):
     await reset_tables(Ticket)
     t = await Ticket.objects.create(code="special")
     assert await Ticket.objects.get(code="special") is t
+
+
+@pytest.mark.asyncio
+async def test_query_subclassed_pk(db):
+    await reset_tables(ImportedTicket)
+    t = await ImportedTicket.objects.create(
+        code="special",
+        meta={"source": "db"}
+    )
+    assert await ImportedTicket.objects.get(code="special") is t
+
+
+@pytest.mark.asyncio
+async def test_query_renamed_pk(db):
+    await reset_tables(Email)
+    email = await Email.objects.create(
+        to="bob@example.com",
+        from_="alice@example.com",
+        body="Hello ;)")
+    assert await Email.objects.get(id=email._id) is email
 
 
 @pytest.mark.asyncio

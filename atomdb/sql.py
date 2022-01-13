@@ -1309,38 +1309,48 @@ class SQLMeta(ModelMeta):
     def __new__(meta, name, bases, dct):
         attrs = dict(dct)
 
+        # Collect all the base members
+        base_members = {}
+        for base in reversed(bases):
+            if issubclass(base, Atom):
+                base_members.update(base.__atom_members__)
+
+        # Lookup the default pk field
+        pk_field = "_id"
+        pk = base_members['_id']
+        for k, m in base_members.items():
+            if k != "_id" and m.metadata and m.metadata.get("primary_key"):
+                pk_field = k
+                attrs["_id"] = Delegator(pk)
+                break
+
         # If a member tagged with primary_key=True is not named "_id" make
         # the _id member a Delegator to the new primary key.
-        pk_field = None
         for k, v in dct.items():
             if k == "_id" or not isinstance(v, Member):
                 continue
             if v.metadata and v.metadata.get("primary_key"):
-                if pk_field is not None:
+                if pk_field != "_id" and k != pk_field:
                     raise NotImplementedError(
                         f"Using multiple primary keys is not yet supported. "
                         f"Both {pk_field} and {k} are marked as primary keys."
                     )
-                assert not isinstance(v, Delegator)
-                attrs["_id"] = Delegator(v)
                 pk_field = k
+                attrs["_id"] = Delegator(v)
 
         cls = ModelMeta.__new__(meta, name, bases, attrs)
 
-        if pk_field is None:
-            pk_field = cls.__pk__
-
-        pk: Member = cls._id
-        if isinstance(pk, Delegator):
-            # Remove "_id" from the fields list
-            if "_id" in cls.__fields__:
-                cls.__fields__.remove("_id")
-            pk = cls._id.delegate
+        # Remove "_id" from the fields list
+        if pk_field != "_id" and "_id" in cls.__fields__:
+            cls.__fields__.remove("_id")
 
         if pk_field not in cls.__fields__:
             cls.__fields__.insert(0, pk_field)
 
         # Set the pk name to the database name.
+        pk: Member = cls._id
+        if isinstance(pk, Delegator):
+            pk = cls._id.delegate
         cls.__pk__ = (pk.metadata or {}).get("name", pk_field)
 
         # Set to the sqlalchemy Table
