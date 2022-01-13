@@ -437,6 +437,9 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
         # Allow custom members to define the column programatically
         return get_column(model)
 
+    if isinstance(member, Delegator):
+        member = member.delegate  # type: ignore
+
     # Copy the metadata as we modify it
     metadata = member.metadata.copy() if member.metadata else {}
 
