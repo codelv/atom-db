@@ -47,7 +47,7 @@ class Comment(NoSQLModel):
     reply_to = ForwardInstance(lambda: Comment)
 
 
-@pytest.yield_fixture()
+@pytest.fixture
 def db(event_loop):
     MONGO_URL = os.environ.get("MONGO_URL", None)
     if MONGO_URL:
