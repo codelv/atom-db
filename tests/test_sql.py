@@ -163,6 +163,12 @@ class Email(SQLModel):
     body = Str().tag(length=1024)
 
 
+class Ticket(SQLModel):
+    code = Str().tag(length=64, primary_key=True)
+    desc = Str().tag(length=500)
+
+
+
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -528,6 +534,21 @@ async def test_query_limit(db):
     # No negative limits
     with pytest.raises(ValueError):
         User.objects.filter()[0:-1]
+
+
+@pytest.mark.asyncio
+async def test_query_pk(db):
+    await reset_tables(Ticket)
+    t = await Ticket.objects.create(code="special")
+    assert await Ticket.objects.get(code="special") is t
+
+
+@pytest.mark.asyncio
+async def test_query_bad_column_name(db):
+    await reset_tables(Ticket)
+    t = await Ticket.objects.create(code="special")
+    with pytest.raises(ValueError):
+        await Ticket.objects.get(unknown="special")
 
 
 @pytest.mark.asyncio

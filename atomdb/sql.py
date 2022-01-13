@@ -322,9 +322,12 @@ def resolve_member_column(
             field = model.__pk__
 
     # Finally get the column from the table
-    col = model.objects.table.columns.get(field)
+    columns = model.objects.table.columns
+    col = columns.get(field)
     if col is None:
-        raise ValueError("Invalid field %s on %s" % (field, model))
+        raise ValueError(
+            "Invalid column '%s' on %s: Must be one of %s" % (field, model, columns)
+        )
     return col
 
 
@@ -438,7 +441,13 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
         return metadata["column"]
 
     metadata.pop("store", None)
-    column_name = metadata.pop("name", member.name)
+
+    default_name = member.name
+    if default_name == "_id":
+        # Workaround Delegator replacing the original name
+        default_name = model.__pk__
+
+    column_name = metadata.pop("name", default_name)
     column_type = metadata.pop("type", None)
 
     # Extract column kwargs from member metadata
