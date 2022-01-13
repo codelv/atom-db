@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/codelv/atom-db.svg?branch=master)](https://travis-ci.com/codelv/atom-db)
+[![status](https://github.com/codelv/atom-db/actions/workflows/ci.yml/badge.svg)](https://github.com/codelv/atom-db/actions)
 [![codecov](https://codecov.io/gh/codelv/atom-db/branch/master/graph/badge.svg)](https://codecov.io/gh/codelv/atom-db)
 
 atom-db is a database abstraction layer for the

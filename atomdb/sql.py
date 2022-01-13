@@ -1317,7 +1317,7 @@ class SQLMeta(ModelMeta):
 
         # Lookup the default pk field
         pk_field = "_id"
-        pk = base_members['_id']
+        pk = base_members["_id"]
         for k, m in base_members.items():
             if k != "_id" and m.metadata and m.metadata.get("primary_key"):
                 pk_field = k
