@@ -173,6 +173,14 @@ class ImportedTicket(Ticket):
     meta = Dict()
 
 
+class Document(SQLModel):
+    uuid = Str().tag(length=64, primary_key=True)
+
+
+class Project(SQLModel):
+    doc = Instance(Document)
+
+
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -1053,6 +1061,15 @@ async def test_object_caching(db):
     # Make sure cache was cleaned up
     aref = Email.objects.cache.get(pk)
     assert aref is None, "Cached object was not released"
+
+
+@pytest.mark.asyncio
+async def test_fk_custom_type(db):
+    await reset_tables(Document, Project)
+    doc = await Document.objects.create(uuid="foo")
+    project = await Project.objects.create(doc=doc)
+    col = Project.objects.table.columns['doc']
+    assert isinstance(col.type, sa.String)
 
 
 def test_invalid_meta_field():

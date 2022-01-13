@@ -206,7 +206,11 @@ def py_type_to_sql_column(
         cls.__backrefs__.add((model, member))
 
         # Determine the type of the foreign key
-        column = create_table_column(cls, cls._id)
+        if cls.__table__ is not None:
+            # Reuse column if available
+            column = cls.__table__.columns[cls.__pk__]
+        else:
+            column = create_table_column(cls, cls._id)
         return (column.type, sa.ForeignKey(name, **kwargs))
     elif issubclass(cls, str):
         return sa.String(**kwargs)
