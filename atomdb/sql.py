@@ -1347,6 +1347,22 @@ class SQLMeta(ModelMeta):
 
         cls = ModelMeta.__new__(meta, name, bases, attrs)
 
+        # Check that the atom member indexes are still valid after
+        # reassinging to avoid a bug in the past.
+        member_indices = set()
+        for name, m in cls.members().items():
+            if name == "_id":
+                continue  # The _id is an alias
+            assert (
+                m.index not in member_indices
+            ), "Atom index is invalid: \n  {}\n  {}".format(
+                cls,
+                "\n  ".join(
+                    [f"{m.index}: {k} {m}({m.name})" for k, m in cls.members().items()]
+                ),
+            )
+            member_indices.add(m.index)
+
         # Remove "_id" from the fields list
         if pk_field != "_id" and "_id" in cls.__fields__:
             cls.__fields__.remove("_id")
