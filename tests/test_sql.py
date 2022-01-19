@@ -60,6 +60,7 @@ class JobRole(SQLModel):
     name = Str().tag(length=64)
     default = Bool()
     job = Instance(Job)
+    tasks = Relation(lambda: JobTask)
 
     check_one_default = sa.schema.DDL(
         """
@@ -91,6 +92,12 @@ class JobRole(SQLModel):
             ),
             ("after_create", lambda: JobRole.trigger.execute_if(dialect="postgresql")),
         ]
+
+
+class JobTask(SQLModel):
+    id = Int().tag(primary_key=True)
+    role = Instance(JobRole)
+    desc = Str()
 
 
 class ImageInfo(JSONModel):
@@ -158,9 +165,27 @@ class Comment(SQLModel):
 
 
 class Email(SQLModel):
+    id = Int().tag(name="email_id", primary_key=True)
     to = Str().tag(length=120)
     from_ = Str().tag(name="from").tag(length=120)
     body = Str().tag(length=1024)
+
+
+class Ticket(SQLModel):
+    code = Str().tag(length=64, primary_key=True)
+    desc = Str().tag(length=500)
+
+
+class ImportedTicket(Ticket):
+    meta = Dict()
+
+
+class Document(SQLModel):
+    uuid = Str().tag(length=64, primary_key=True)
+
+
+class Project(SQLModel):
+    doc = Instance(Document)
 
 
 def test_build_tables():
@@ -177,6 +202,79 @@ def test_custom_table_name():
     assert Test.objects.table.name == table_name
 
 
+def test_sanity_pk_and_fields():
+    class A(SQLModel):
+        foo = Str()
+
+    assert A.__pk__ == '_id'
+    assert A.__fields__ == ['_id', 'foo']
+
+
+def test_sanity_pk_override():
+    class A(SQLModel):
+        id = Int().tag(primary_key=True)
+        foo = Str()
+
+    assert A._id is A.id
+    assert A.__pk__ == 'id'
+    assert A.__fields__ == ['id', 'foo']
+
+
+def test_sanity_pk_renamed():
+    class A(SQLModel):
+        id = Int().tag(primary_key=True, name="table_id")
+        foo = Str()
+
+    assert A._id is A.id
+    assert A.__pk__ == 'table_id'
+    assert A.__fields__ == ['id', 'foo']
+
+
+def test_sanity_relation_exluded():
+    class Child(SQLModel):
+        pass
+
+    class Parent(SQLModel):
+        children = Relation(lambda: Child)
+
+    assert "children" in Parent.__excluded_fields__
+
+
+@pytest.mark.asyncio
+async def test_sanity_flatten_unflatten():
+
+    async def unflatten_date(v: str, scope=None):
+        return datetime.strptime(v, "%Y-%m-%d").date()
+
+    def flatten_date(v: date, scope=None):
+        return v.strftime("%Y-%m-%d")
+
+    class TableOfUnformattedGarbage(SQLModel):
+        created = Instance(date).tag(
+            type=sa.String(length=10),
+            flatten=flatten_date,
+            unflatten=unflatten_date)
+
+    r = await TableOfUnformattedGarbage.restore({
+        '__model__': TableOfUnformattedGarbage.__model__,
+        '_id': 1,
+        'created': '2020-10-28',
+    })
+    assert r.created == date(2020, 10, 28)
+    assert r.__getstate__()['created'] == '2020-10-28'
+
+
+def test_sanity_renamed_fields():
+    class A(SQLModel):
+        some_field = Str().tag(name="SomeField")
+
+    class B(SQLModel):
+        other_field = Str()
+
+    A.__renamed_fields__ == {"some_field": "SomeField"}
+    B.__renamed_fields__ == {"some_field": "SomeField"}
+
+
 def test_table_subclass():
     # Test that a non-abstract table can be subclassed
     class Base(SQLModel):
@@ -189,11 +287,19 @@ def test_table_subclass():
         class Meta:
             db_table = "test_a"
 
+    assert A.__pk__ == 'id'
+    assert A.__model__ == "test_a"
+    assert A.__fields__ == ['id']
+
     class B(A):
         extra_col = Dict()
 
         class Meta:
             db_table = "test_b"
+
+    assert B.__pk__ == 'id'
+    assert B.__model__ == "test_b"
+    assert B.__fields__ == ['id', 'extra_col']
 
 
 async def reset_tables(*models):
@@ -447,6 +553,41 @@ async def test_query_limit(db):
     # No negative limits
     with pytest.raises(ValueError):
         User.objects.filter()[0:-1]
+
+
+@pytest.mark.asyncio
+async def test_query_pk(db):
+    await reset_tables(Ticket)
+    t = await Ticket.objects.create(code="special")
+    assert await Ticket.objects.get(code="special") is t
+
+
+@pytest.mark.asyncio
+async def test_query_subclassed_pk(db):
+    await reset_tables(ImportedTicket)
+    t = await ImportedTicket.objects.create(
+        code="special",
+        meta={"source": "db"}
+    )
+    assert await ImportedTicket.objects.get(code="special") is t
+
+
+@pytest.mark.asyncio
+async def test_query_renamed_pk(db):
+    await reset_tables(Email)
+    email = await Email.objects.create(
+        to="bob@example.com",
+        from_="alice@example.com",
+        body="Hello ;)")
+    assert await Email.objects.get(id=email._id) is email
+
+
+@pytest.mark.asyncio
+async def test_query_bad_column_name(db):
+    await reset_tables(Ticket)
+    t = await Ticket.objects.create(code="special")
+    with pytest.raises(ValueError):
+        await Ticket.objects.get(unknown="special")
 
 
 @pytest.mark.asyncio
@@ -835,6 +976,32 @@ async def test_query_many_to_one(db):
 
 
 @pytest.mark.asyncio
+async def test_query_multiple_joins(db):
+    await reset_tables(Job, JobRole, JobTask)
+
+    ceo = await Job.objects.create(name="CEO")
+    cfo = await Job.objects.create(name="CFO")
+    swe = await Job.objects.create(name="SWE")
+
+    ceo_role = await JobRole.objects.create(name="CEO", job=ceo)
+    cfo_role = await JobRole.objects.create(name="CFO", job=cfo)
+    swe_role = await JobRole.objects.create(name="SWE", job=swe)
+
+    code_task = await JobTask.objects.create(desc="Code", role=swe_role)
+    hire_task = await JobTask.objects.create(desc="Hire", role=ceo_role)
+    fire_task = await JobTask.objects.create(desc="Fire", role=ceo_role)
+    account_task = await JobTask.objects.create(desc="Account", role=cfo_role)
+
+    jobs = await Job.objects.filter(roles__tasks__desc="Fire")
+    assert jobs == [ceo]
+
+    jobs = await Job.objects.order_by("name").filter(
+        roles__tasks__desc__notin=["Hire", "Fire"])
+    assert jobs == [cfo, swe]
+
+
+
+@pytest.mark.asyncio
 async def test_save_update_fields(db):
     """Test that using save with update_fields only updates the fields
     specified
@@ -927,6 +1094,15 @@ async def test_object_caching(db):
     # Make sure cache was cleaned up
     aref = Email.objects.cache.get(pk)
     assert aref is None, "Cached object was not released"
+
+
+@pytest.mark.asyncio
+async def test_fk_custom_type(db):
+    await reset_tables(Document, Project)
+    doc = await Document.objects.create(uuid="foo")
+    project = await Project.objects.create(doc=doc)
+    col = Project.objects.table.columns['doc']
+    assert isinstance(col.type, sa.String)
 
 
 def test_invalid_meta_field():

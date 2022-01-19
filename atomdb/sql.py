@@ -865,14 +865,16 @@ class SQLQuerySet(Atom, Generic[T]):
         from_table = p.table
         tables = [from_table]
         model = p.model
-        members = model.members()
         use_labels = bool(self.related_clauses)
         outer_join = self.outer_join
         for clause in self.related_clauses:
             from_table = p.table
+            rel_model = model
+
+            # Walk the fk relations
             for part in clause.split("__"):
-                m = members.get(part)
-                assert m is not None
+                m = rel_model.members().get(part)
+                assert m is not None, f"{rel_model} has no field {part}"
                 rel_model_types = resolve_member_types(m)
                 assert rel_model_types is not None
                 rel_model = rel_model_types[0]
@@ -1322,7 +1324,7 @@ class SQLMeta(ModelMeta):
             cls._id = members["_id"] = pk
 
             # Remove "_id" from the fields list as it is now an alias
-            cls.__fields__ = tuple((f for f in cls.__fields__ if f != "_id"))
+            cls.__fields__ = [f for f in cls.__fields__ if f != "_id"]
 
         # Check that the atom member indexes are still valid after
         # reassinging to avoid a bug in the past.

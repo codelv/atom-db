@@ -1,3 +1,7 @@
+# 0.6.4
+
+- Fix queries joining through multiple tables
+
 # 0.6.3
 
 - Add workaround for subclassed pk handling
