@@ -169,6 +169,15 @@ class Email(SQLModel):
     to = Str().tag(length=120)
     from_ = Str().tag(name="from").tag(length=120)
     body = Str().tag(length=1024)
+    attachments = Relation(lambda: Attachment)
+
+
+class Attachment(SQLModel):
+    id = Int().tag(primary_key=True)
+    email = Instance(Email).tag(nullable=False)
+    name = Str().tag(length=100)
+    size = Int()
+    data = Bytes()
 
 
 class Ticket(SQLModel):
@@ -622,6 +631,92 @@ async def test_query_select_related(db):
     assert len(roles) == 2
     assert roles[0].job.__restored__ is True
     assert roles[1].job is None
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related_invalid(db):
+    await reset_tables(Email, Attachment)
+    with pytest.raises(ValueError):
+        await Email.objects.prefetch_related("comments").all()
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related(db):
+    await reset_tables(Email, Attachment)
+
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+        body="Please checkout this project")
+    await Attachment.objects.create(
+        email=email, name="a.txt", data=b'a')
+    await Attachment.objects.create(
+        email=email, name="b.txt", data=b'b')
+
+    email = await Email.objects.create(
+        to="bob@example.com",
+        from_="alice@example.com",
+        body="Cat pictures!")
+    await Attachment.objects.create(
+        email=email, name="new.jpg", data=b'photo')
+
+    # Purge cache
+    del email
+    Email.objects.cache.clear()
+    Attachment.objects.cache.clear()
+    gc.collect()
+
+    # No prefetch
+    emails = await Email.objects.all()
+    assert len(emails) == 2
+    for email in emails:
+        assert len(email.attachments) == 0
+
+    # Purge cache
+    del email, emails
+    Email.objects.cache.clear()
+    Attachment.objects.cache.clear()
+    gc.collect()
+
+    emails = await Email.objects.prefetch_related("attachments").all()
+    assert len(emails) == 2
+
+    email = emails[0]
+    assert len(email.attachments) == 2
+    attachment = email.attachments[0]
+    assert attachment.name == "a.txt"
+    assert attachment.data == b"a"
+    assert attachment.email is email
+    attachment = email.attachments[1]
+    assert attachment.name == "b.txt"
+    assert attachment.data == b"b"
+    assert attachment.email is email
+
+    email = emails[1]
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
+
+    email = await Email.objects.prefetch_related("attachments").get(
+        to="bob@example.com")
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
+
+    emails = await Email.objects.prefetch_related("attachments").filter(
+        body__contains="pictures")
+    assert len(emails) == 1
+
+    email = emails[0]
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
 
 
 @pytest.mark.asyncio

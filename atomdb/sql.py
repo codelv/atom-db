@@ -325,6 +325,36 @@ def resolve_member_column(
     return col
 
 
+def resolve_relation(
+    model: Type["SQLModel"], field: str
+) -> TupleType[Type[Model], Member]:
+    """Lookup a Relation.
+
+    Parameters
+    ----------
+    model: SQLModel
+        The model to lookup.
+    field: str
+        Path to of a Relation member
+
+    Returns
+    -------
+    result: tuple[SQLModel, Member]
+        The model this field refers to and the member on that model that is
+        a foreign key to the given model.
+
+    """
+    relation = model.members().get(field)
+    if isinstance(relation, Relation):
+        RelModel = cast(Relation, relation).to
+        # Find the referring member
+        # TODO: This does not support multiple backrefs
+        for other_model, referring_member in model.__backrefs__:
+            if RelModel is other_model:
+                return (other_model, referring_member)
+    raise ValueError("Invalid prefetch relation '%s' from %s" % (field, model))
+
+
 def atom_member_to_sql_column(
     model: Type["SQLModel"], member: Member, **kwargs
 ) -> TypeEngine:
@@ -847,6 +877,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
     filter_clauses = List()
     related_clauses = List()
+    prefetch_clauses = List()
     outer_join = Bool()
     order_clauses = List()
     distinct_clauses = List()
@@ -934,6 +965,23 @@ class SQLQuerySet(Atom, Generic[T]):
         outer_join = self.outer_join if outer_join is None else outer_join
         related_clauses = self.related_clauses + list(related)
         return self.clone(related_clauses=related_clauses, outer_join=outer_join)
+
+    def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
+        """Define related fields to prefetch in a separate query.
+
+        Parameters
+        ----------
+        args: List[str]
+            List of related fields fetchs
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the prefetch fields added.
+
+        """
+        prefetch_clauses = self.prefetch_clauses + list(related)
+        return self.clone(prefetch_clauses=prefetch_clauses)
 
     def order_by(self, *args):
         """Order the query by the given fields.
@@ -1190,10 +1238,11 @@ class SQLQuerySet(Atom, Generic[T]):
     async def all(self, *args, **kwargs) -> Sequence[T]:
         if args or kwargs:
             return await self.filter(*args, **kwargs).all()
+        cache = await self.prefetch()
         q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
-        return [cast(T, await restore(row)) for row in cursor]
+        return [cast(T, await restore(row, prefetched=cache)) for row in cursor]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
         """Get the first result matching the query. Unlike django this will
@@ -1212,7 +1261,41 @@ class SQLQuerySet(Atom, Generic[T]):
         row = await self.proxy.fetchone(q, connection=self.connection)
         if row is None:
             return None
-        return cast(T, await self.proxy.model.restore(row))
+        cache = await self.prefetch()
+        return cast(T, await self.proxy.model.restore(row, prefetched=cache))
+
+    async def prefetch(self) -> Optional[DictType[Any, StateType]]:
+        """Perform a prefetch lookup and populate the cache."""
+        if not self.prefetch_clauses:
+            return None
+
+        # Cache is a mapping of this model's pk to related member field values
+        cache: DictType[Any, StateType] = {}
+
+        model = self.proxy.model
+        sub_query = self.query("select", model.objects.table.c[model.__pk__])
+
+        # Perform a query for each related field
+        for field in self.prefetch_clauses:
+            #: TDOO: This only works with a single relation
+            RelModel, ref_member = resolve_relation(model, field)
+            name = (ref_member.metadata or {}).get("name", ref_member.name)
+            rel_col = RelModel.objects.table.c[name]
+            results = await RelModel.objects.filter(rel_col.in_(sub_query))
+
+            # Group the results by the this models pk
+            # Eg if Email.attachments is a relation to Attachments
+            # This will group by the Email value
+            for r in results:
+                pk = ref_member.get_slot(r)._id
+                prefetched_state = cache.get(pk)
+                if prefetched_state is None:
+                    prefetched_state = cache[pk] = {field: []}
+                relation_values = prefetched_state.get(field)
+                if relation_values is None:
+                    relation_values = prefetched_state[field] = []
+                relation_values.append(r)
+        return cache
 
 
 class SQLBinding(Atom):
@@ -1337,6 +1420,7 @@ class SQLMeta(ModelMeta):
 
         # Set the pk name
         cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
+        cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
 
         # Set to the sqlalchemy Table
         cls.__table__ = None
@@ -1406,8 +1490,11 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Primary key field name
     __pk__: ClassVar[str]
 
+    #: Table name and primary key
+    __joined_pk__: ClassVar[str]
+
     #: Models which link back to this
-    __backrefs__: ClassVar[SetType[TupleType[Type["Model"], Member]]]
+    __backrefs__: ClassVar[SetType[TupleType[Type[Model], Member]]]
 
     #: List of fields which have been tagged with a different column name
     #: Mapping is class attr -> database column name.
@@ -1434,7 +1521,11 @@ class SQLModel(Model, metaclass=SQLMeta):
 
     @classmethod
     async def restore(
-        cls: Type[T], state: StateType, force: Optional[bool] = None, **kwargs: Any
+        cls: Type[T],
+        state: StateType,
+        force: Optional[bool] = None,
+        prefetched: Optional[DictType[Any, StateType]] = None,
+        **kwargs: Any,
     ) -> T:
         """Restore an object from the database using the primary key. Save
         a ref in the table's object cache.  If force is True, update
@@ -1443,7 +1534,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         try:
             # When sqlalchemy does a join the key will have a prefix
             # of the database name
-            pk = state[f"{cls.__model__}_{cls.__pk__}"]
+            pk = state[cls.__joined_pk__]
         except KeyError:
             pk = state[cls.__pk__]
 
@@ -1458,10 +1549,23 @@ class SQLModel(Model, metaclass=SQLMeta):
             # Create and cache it
             obj = cls.__new__(cls)
             cache[pk] = obj
+            restore = True
+        else:
+            # Note that if force is false and the object was restored
+            # (ie from another query) the object in the cache is reused
+            # and any (potentially new) data in the state is discarded.
+            restore = force or not obj.__restored__
+
+        if restore:
+            # Merge any prefetched relation members into the restore state
+            # so the base class's restore method can find them.
+            if prefetched is not None:
+                prefetched_state = prefetched.get(pk)
+                if prefetched_state is not None:
+                    state = dict(state)  # Convert row proxy
+                    state.update(prefetched_state)
 
             # This ideally should only be done if created
-            await obj.__restorestate__(state)
-        elif force or not obj.__restored__:
             await obj.__restorestate__(state)
 
         return obj
@@ -1474,7 +1578,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         cleaned_state: StateType = {}
 
         # Check if the state is using labels by looking for the pk field
-        pk_label = f"{self.__model__}_{self.__pk__}"
+        pk_label = self.__joined_pk__
 
         if pk_label in state:
             # Convert row to dict because it speeds up lookups
@@ -1497,7 +1601,7 @@ class SQLModel(Model, metaclass=SQLMeta):
                     if issubclass(RelModel, SQLModel):
                         # If the related model was joined, the pk field should
                         # exist so automatically restore that as well
-                        rel_pk_name = f"{RelModel.__model__}_{RelModel.__pk__}"
+                        rel_pk_name = RelModel.__joined_pk__
                         try:
                             rel_id = state[field_label]
                         except KeyError:
