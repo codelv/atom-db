@@ -15,7 +15,7 @@ import traceback
 from typing import Dict as DictType
 from typing import List as ListType
 from typing import Tuple as TupleType
-from typing import Any, ClassVar, Generic, Type, TypeVar, Optional, Union
+from typing import Any, ClassVar, Generic, Type, TypeVar, Optional, Union, Callable
 from collections.abc import MutableMapping
 from random import getrandbits
 from pprint import pformat
@@ -36,6 +36,8 @@ from atom.api import (
     Typed,
     Bytes,
     Bool,
+    Int,
+    Float,
     set_default,
 )
 
@@ -44,6 +46,8 @@ M = TypeVar("M", bound="Model")
 ScopeType = DictType[Union[str, bytes], Any]
 StateType = DictType[str, Any]
 logger = logging.getLogger("atomdb")
+GetStateFn = Callable[[M, Optional[ScopeType]], StateType]
+RestoreStateFn = Callable[[M, StateType, Optional[ScopeType]], None]
 
 
 def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
@@ -76,6 +80,27 @@ def is_db_field(m: Member) -> bool:
     if metadata is not None:
         return metadata.get("store", default)
     return default
+
+
+def is_primitive_member(m: Member) -> bool:
+    """Check if the member can be serialized without calling flatten.
+
+    Parameters
+    ----------
+    m: Member
+        The atom member to check.
+
+    Returns
+    -------
+    result: bool
+        Whether the member is a primiative type that can be intrinsicly
+        converted.
+
+    """
+    if isinstance(m, (Bool, Str, Int, Float)):
+        return True
+    # TODO: Handle more such as List(str), etc..
+    return False
 
 
 class ModelSerializer(Atom):
@@ -318,6 +343,185 @@ class ModelManager(Atom):
         raise NotImplementedError
 
 
+def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetStateFn:
+    """Generate an optimized __getstate__ function for the given model.
+
+    Parameters
+    ----------
+    cls: Type[Model]
+        The clase to generate a getstate function for.
+
+    Returns
+    -------
+    result: GetStateFn
+        A function optimized to generate the state for the given model class.
+
+    """
+    template = [
+        "def __getstate__(self, scope=None):",
+        "scope = scope or {}",
+        "scope[self.__ref__] = self",
+        "return {",
+    ]
+    if include_defaults:
+        template.extend(
+            [
+                '    "__model__": self.__model__,',
+                '    "__ref__": self.__ref__,',
+                '    "_id": self._id,',
+            ]
+        )
+
+    default_flatten = cls.serializer.flatten
+    members = cls.members()
+    namespace = {}
+    for f in cls.__fields__:
+        # Since f is potentially an untrusted input, make sure it is a valid
+        # python identifier to prevent unintended code being generated.
+        if not f.isidentifier():
+            raise ValueError(f"Field '{f}' cannot be used for code generation")
+        m = members[f]
+        meta = m.metadata or {}
+        flatten = meta.get("flatten", default_flatten)
+        if flatten is default_flatten and is_primitive_member(m):
+            template.append(f'    "{f}": self.{f},')
+        else:
+            namespace[f"flatten_{f}"] = flatten
+            template.append(
+                f'    "{f}": flatten_{f}(self.{f}, scope),',
+            )
+
+    template.append("}")
+    source = "\n    ".join(template)
+    return generate_function(source, namespace, "__getstate__")
+
+
+def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
+    """Generate an optimized __restorestate__ function for the given model.
+
+    Parameters
+    ----------
+    cls: Type[Model]
+        The clase to generate a getstate function for.
+
+    Returns
+    -------
+    result: RestoreStateFn
+        A function optimized to restore the state for the given model class.
+
+    """
+    cls.__model__
+    on_error = cls.__on_error__
+    template = [
+        "async def __restorestate__(self, state, scope=None):",
+        "if '__model__' in state and state['__model__'] != self.__model__:",
+        "    name = state['__model__']",
+        "    raise ValueError(",
+        "        f'Trying to use {name} state for {self.__model__} object'",
+        "    )",
+        "scope = scope or {}",
+        "if '__ref__' in state:",
+        "    scope[state['__ref__']] = self",
+    ]
+
+    default_unflatten = cls.serializer.unflatten
+    members = cls.members()
+    excluded = (
+        "__ref__",
+        "__restored__",
+    )
+    setters = []
+    for f, m in members.items():
+        if f in excluded:
+            continue
+        meta = m.metadata or {}
+        order = meta.get("setstate_order", 1000)
+
+        # Allow  tagging a custom unflatten fn
+        unflatten = meta.get("unflatten", default_unflatten)
+
+        setters.append((order, f, unflatten))
+    setters.sort(key=lambda it: it[0])
+
+    on_error = cls.__on_error__
+
+    namespace = {
+        "default_unflatten": default_unflatten,
+    }
+    for order, f, unflatten in setters:
+        # Since f is potentially an untrusted input, make sure it is a valid
+        # python identifier to prevent unintended code being generated.
+        if not f.isidentifier():
+            raise ValueError(f"Field '{f}' cannot be used for code generation")
+        m = members[f]
+        template.append(f"if '{f}' in state:")
+        if unflatten is default_unflatten:
+            if is_primitive_member(m):
+                # Direct assignment
+                expr = f"self.{f} = state['{f}']"
+            else:
+                # Default flatten
+                expr = f"self.{f} = await default_unflatten(state['{f}'], scope)"
+        else:
+            namespace[f"unflatten_{f}"] = unflatten
+            expr = f"self.{f} = await unflatten_{f}(state['{f}'], scope)"
+
+        if on_error == "raise":
+            template.append(f"    {expr}")
+        else:
+            if on_error == "log":
+                handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
+            else:
+                handler = "pass"
+            template.extend(
+                [
+                    f"    try:",
+                    f"        {expr}",
+                    f"    except Exception as e:",
+                    f"        {handler}",
+                ]
+            )
+
+    # Update restored state
+    template.append("self.__restored__ = True")
+    source = "\n    ".join(template)
+    return generate_function(source, namespace, "__restorestate__")
+
+
+def generate_function(source: str, namespace: DictType[str, Any], fn_name: str):
+    """Generate an optimized function
+
+    Parameters
+    ----------
+    source: str
+        The function source code
+    namespaced: dict
+        Namespace available to the function
+    fn_name: str
+        The name of the generated function.
+
+    Returns
+    -------
+    fn: function
+        The function generated.
+
+    """
+    # print(source)
+    try:
+        assert source.startswith(f"def {fn_name}") or source.startswith(
+            f"async def {fn_name}"
+        )
+        code = compile(source, __name__, "exec", optimize=1)
+    except Exception as e:
+        raise RuntimeError(f"Could not generate code: {e}:\n{source}")
+
+    # TODO: Use byteplay to rewrite globals to load fast
+
+    result: DictType[str, Any] = {}
+    exec(code, namespace, result)
+    return result[fn_name]  # type: ignore
+
+
 class ModelMeta(AtomMeta):
     def __new__(meta, name, bases, dct):
         cls = AtomMeta.__new__(meta, name, bases, dct)
@@ -333,6 +537,15 @@ class ModelMeta(AtomMeta):
         # when restoring
         if "__model__" not in dct:
             cls.__model__ = f"{cls.__module__}.{cls.__name__}"
+
+        # Generate optimized get and restore functions
+        # Some general testing indicates this improves getstate by about 2x
+        # and restorestate by about 20% but it depends on the model.
+        if "__generated_getstate__" not in dct:
+            cls.__generated_getstate__ = generate_getstate(cls)
+
+        if "__generated_restorestate__" not in dct:
+            cls.__generated_restorestate__ = generate_restorestate(cls)
 
         return cls
 
@@ -383,30 +596,26 @@ class Model(Atom, metaclass=ModelMeta):
 
     serializer: ModelSerializer = ModelSerializer.instance()
 
+    #: Optimized serialize functions. These are generated by the metaclass.
+    __generated_getstate__: ClassVar[GetStateFn]
+    __generated_restorestate__: ClassVar[RestoreStateFn]
+
     def __getstate__(self, scope: Optional[ScopeType] = None) -> StateType:
-        default_flatten = self.serializer.flatten
+        """Get the serialized model state. By default this delegates to an
+        optimized function generated by the ModelMeta class.
 
-        scope = scope or {}
+        Parameters
+        ----------
+        scope: Optionl[ScopeType
+            The scope to lookup circular references.
 
-        # ID for circular references
-        ref = self.__ref__
-        scope[ref] = self
+        Returns
+        -------
+        state: StateType
+            The state of the object.
 
-        state = {
-            "__model__": self.__model__,
-            "__ref__": ref,
-        }
-        if self._id is not None:
-            state["_id"] = self._id
-
-        members = self.members()
-        for f in self.__fields__:
-            m = members[f]
-            meta = m.metadata or {}
-            flatten = meta.get("flatten", default_flatten)
-            state[f] = flatten(getattr(self, f), scope)
-
-        return state
+        """
+        return self.__generated_getstate__(scope)
 
     async def __restorestate__(
         self, state: StateType, scope: Optional[ScopeType] = None
@@ -428,63 +637,28 @@ class Model(Atom, metaclass=ModelMeta):
             The __ref__ value is used as the keys.
 
         """
-        name = state.get("__model__", self.__model__)
-        if name != self.__model__:
-            raise ValueError(
-                f"Trying to use {name} state for " f"{self.__model__} object"
-            )
-        scope = scope or {}
-        ref = state.get("__ref__")
-        if ref is not None:
-            scope[ref] = self
-        members = self.members()
+        await self.__generated_restorestate__(state, scope)  # type: ignore
 
-        # Order the keys by the members 'setstate_order' if given
-        valid_keys = []
-        default_unflatten = self.serializer.unflatten
-        for k in state.keys():
-            m = members.get(k)
-            if m is not None:
-                meta = m.metadata or {}
-                order = meta.get("setstate_order", 1000)
+    def __log_restore_error__(
+        self, e: Exception, k: str, state: StateType, scope: ScopeType
+    ):
+        """Log details when restoring a member fails. This typically only will
+        occur if the state has data from an old model after a schema change.
 
-                # Allow  tagging a custom unflatten fn
-                unflatten = meta.get("unflatten", default_unflatten)
+        """
+        obj = state.get(k)
+        logger.debug(
+            f"Error loading state:"
+            f"{self.__model__}.{k} = {pformat(obj)}:"
+            f"\nSelf: {self.__ref__}: {scope.get(self.__ref__)}"
+            f"\nScope: {pformat(scope)}"
+            f"\nState: {pformat(state)}"
+            f"\n{e}"
+        )
 
-                valid_keys.append((order, k, unflatten))
-        valid_keys.sort(key=lambda it: it[0])
-
-        # Save initial database state
-        # self.__state__ = dict(state)
-
-        on_error = self.__on_error__
-
-        for order, k, unflatten in valid_keys:
-            try:
-                v = state[k]
-                obj = await unflatten(v, scope)
-                setattr(self, k, obj)
-            except Exception as e:
-                if on_error == "raise":
-                    raise
-                elif on_error == "log":
-                    exc = traceback.format_exc()
-                    logger.debug(
-                        f"Error loading state:"
-                        f"{self.__model__}.{k} = {pformat(obj)}:"
-                        f"\nSelf: {ref}: {scope.get(ref)}"
-                        f"\nValue: {pformat(v)}"
-                        f"\nScope: {pformat(scope)}"
-                        f"\nState: {pformat(state)}"
-                        f"\n{exc}"
-                    )
-
-        # Update restored state
-        self.__restored__ = True
-
-    # ==========================================================================
+    # --------------------------------------------------------------------------
     # Database API
-    # ==========================================================================
+    # --------------------------------------------------------------------------
 
     #: Handles database access. Subclasses should redefine this.
     objects: ModelManager = ModelManager()
@@ -564,7 +738,7 @@ class JSONSerializer(ModelSerializer):
 
 class JSONModel(Model):
     """A simple model that can be serialized to json. Useful for embedding
-    within other objects.
+    within other models.
 
     """
 
