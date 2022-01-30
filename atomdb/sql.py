@@ -1531,26 +1531,32 @@ class SQLModel(Model, metaclass=SQLMeta):
         a ref in the table's object cache.  If force is True, update
         the cache if it exists.
         """
-        try:
+        if cls.__joined_pk__ in state:
             # When sqlalchemy does a join the key will have a prefix
             # of the database name
             pk = state[cls.__joined_pk__]
-        except KeyError:
+        else:
             pk = state[cls.__pk__]
 
-        # Check the default for force reloading
-        if force is None:
-            force = not cls.objects.table.bind.manager.cache
+        if pk is not None:
+            # Check if this is in the cache
+            cache = cls.objects.cache
+            obj = cache.get(pk)
+        else:
+            obj = None
 
-        # Check if this is in the cache
-        cache = cls.objects.cache
-        obj = cache.get(pk)
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            cache[pk] = obj
+
+            # Do not place empty pk in cache
+            if pk is not None:
+                cache[pk] = obj
             restore = True
         else:
+            # Check the default for force reloading
+            if force is None:
+                force = not cls.objects.table.bind.manager.cache
             # Note that if force is false and the object was restored
             # (ie from another query) the object in the cache is reused
             # and any (potentially new) data in the state is discarded.

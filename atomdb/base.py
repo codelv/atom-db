@@ -363,10 +363,6 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
         "scope[self.__ref__] = self",
         "state = {",
     ]
-    if include_defaults:
-        template.append('    "__model__": self.__model__,')
-        template.append('    "__ref__": self.__ref__,')
-
     default_flatten = cls.serializer.flatten
     members = cls.members()
     namespace = {}
@@ -386,12 +382,14 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
                 f'    "{f}": flatten_{f}(self.{f}, scope),',
             )
 
-    template.append("}")
-
     if include_defaults:
-        template.append('if self._id is not None:')
+        template.append('    "__model__": self.__model__,')
+        template.append('    "__ref__": self.__ref__,')
+        template.append("}")
+        template.append("if self._id is not None:")
         template.append('    state["_id"] = self._id')
-
+    else:
+        template.append("}")
     template.append("return state")
     source = "\n    ".join(template)
     return generate_function(source, namespace, "__getstate__")
@@ -413,6 +411,9 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
     """
     cls.__model__
     on_error = cls.__on_error__
+
+    # Python must do some caching because using key in state and state[key]
+    # seems to be faster than using get
     template = [
         "async def __restorestate__(self, state, scope=None):",
         "if '__model__' in state and state['__model__'] != self.__model__:",
@@ -421,7 +422,6 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
         "        f'Trying to use {name} state for {self.__model__} object'",
         "    )",
         "scope = scope or {}",
-        # Python must do some caching because this seems to be faster than using get
         "if '__ref__' in state and state['__ref__'] is not None:",
         "    scope[state['__ref__']] = self",
     ]
