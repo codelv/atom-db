@@ -335,13 +335,13 @@ def resolve_relation(
     model: SQLModel
         The model to lookup.
     field: str
-        Path to of a Relation member
+        Path to a Relation member
 
     Returns
     -------
     result: tuple[SQLModel, Member]
         The model this field refers to and the member on that model that is
-        a foreign key to the given model.
+        a foreign key to model.
 
     """
     relation = model.members().get(field)
