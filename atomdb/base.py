@@ -361,16 +361,11 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
         "def __getstate__(self, scope=None):",
         "scope = scope or {}",
         "scope[self.__ref__] = self",
-        "return {",
+        "state = {",
     ]
     if include_defaults:
-        template.extend(
-            [
-                '    "__model__": self.__model__,',
-                '    "__ref__": self.__ref__,',
-                '    "_id": self._id,',
-            ]
-        )
+        template.append('    "__model__": self.__model__,')
+        template.append('    "__ref__": self.__ref__,')
 
     default_flatten = cls.serializer.flatten
     members = cls.members()
@@ -392,6 +387,12 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
             )
 
     template.append("}")
+
+    if include_defaults:
+        template.append('if self._id is not None:')
+        template.append('    state["_id"] = self._id')
+
+    template.append("return state")
     source = "\n    ".join(template)
     return generate_function(source, namespace, "__getstate__")
 
@@ -420,7 +421,8 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
         "        f'Trying to use {name} state for {self.__model__} object'",
         "    )",
         "scope = scope or {}",
-        "if '__ref__' in state:",
+        # Python must do some caching because this seems to be faster than using get
+        "if '__ref__' in state and state['__ref__'] is not None:",
         "    scope[state['__ref__']] = self",
     ]
 
