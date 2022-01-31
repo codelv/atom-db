@@ -1396,10 +1396,6 @@ class SQLMeta(ModelMeta):
             assert m.index not in member_indices
             member_indices.add(m.index)
 
-        # Set the pk name
-        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
-        cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
-
         # Set to the sqlalchemy Table
         cls.__table__ = None
 
@@ -1438,9 +1434,15 @@ class SQLMeta(ModelMeta):
             elif getattr(Meta, "abstract", None) is None:
                 Meta.abstract = False
 
+        # Set the pk name
+        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
+        cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
+
         # Create a set of fields to remove from state before saving to the db
         # this removes Relation instances and several needed for json
-        excluded_fields = cls.__excluded_fields__ = {"__model__", "__ref__", "_id"}
+        excluded_fields = cls.__excluded_fields__ = {"__model__", "__ref__"}
+        if cls.__pk__ != "_id":
+            excluded_fields.add("_id")
 
         for name, member in cls.members().items():
             if isinstance(member, Relation):
