@@ -10,6 +10,7 @@ Created on Jun 12, 2018
 @author: jrm
 """
 import os
+import asyncio
 import logging
 import traceback
 from typing import Dict as DictType
@@ -417,7 +418,9 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
     ]
     default_flatten = cls.serializer.flatten
     members = cls.members()
-    namespace = {}
+    namespace = {
+        "default_flatten": default_flatten,
+    }
     for f in cls.__fields__:
         # Since f is potentially an untrusted input, make sure it is a valid
         # python identifier to prevent unintended code being generated.
@@ -426,13 +429,15 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
         m = members[f]
         meta = m.metadata or {}
         flatten = meta.get("flatten", default_flatten)
-        if flatten is default_flatten and is_primitive_member(m):
-            template.append(f'    "{f}": self.{f},')
+        if flatten is default_flatten:
+            if is_primitive_member(m):
+                expr = f"self.{f}"
+            else:
+                expr = f"default_flatten(self.{f}, scope)"
         else:
             namespace[f"flatten_{f}"] = flatten
-            template.append(
-                f'    "{f}": flatten_{f}(self.{f}, scope),',
-            )
+            expr = f"flatten_{f}(self.{f}, scope)"
+        template.append(f'    "{f}": {expr},')
 
     if include_defaults:
         template.append('    "__model__": self.__model__,')
@@ -506,19 +511,25 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
             raise ValueError(f"Field '{f}' cannot be used for code generation")
         m = members[f]
         template.append(f"if '{f}' in state:")
+
+        # Determine the expresion to unflatten the value
         if unflatten is default_unflatten:
             if is_primitive_member(m):
                 # Direct assignment
-                expr = f"self.{f} = state['{f}']"
+                expr = f"state['{f}']"
             else:
                 # Default flatten
-                expr = f"self.{f} = await default_unflatten(state['{f}'], scope)"
+                expr = f"await default_unflatten(state['{f}'], scope)"
         else:
             namespace[f"unflatten_{f}"] = unflatten
-            expr = f"self.{f} = await unflatten_{f}(state['{f}'], scope)"
+            if asyncio.iscoroutinefunction(unflatten):
+                expr = f"await unflatten_{f}(state['{f}'], scope)"
+            else:
+                expr = f"unflatten_{f}(state['{f}'], scope)"
 
+        # Do the assignment
         if on_error == "raise":
-            template.append(f"    {expr}")
+            template.append(f"    self.{f} = {expr}")
         else:
             if on_error == "log":
                 handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
@@ -527,7 +538,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
             template.extend(
                 [
                     f"    try:",
-                    f"        {expr}",
+                    f"        self.{f} = {expr}",
                     f"    except Exception as e:",
                     f"        {handler}",
                 ]
