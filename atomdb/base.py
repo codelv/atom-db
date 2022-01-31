@@ -34,10 +34,15 @@ from atom.api import (
     Coerced,
     Value,
     Typed,
+    List,
     Bytes,
     Bool,
     Int,
     Float,
+    Tuple,
+    Set,
+    ForwardInstance,
+    ForwardTyped,
     set_default,
 )
 
@@ -82,7 +87,7 @@ def is_db_field(m: Member) -> bool:
     return default
 
 
-def is_primitive_member(m: Member) -> bool:
+def is_primitive_member(m: Member) -> Optional[bool]:
     """Check if the member can be serialized without calling flatten.
 
     Parameters
@@ -92,15 +97,48 @@ def is_primitive_member(m: Member) -> bool:
 
     Returns
     -------
-    result: bool
+    result: Optional[bool]
         Whether the member is a primiative type that can be intrinsicly
-        converted.
+        converted. If the result is None the member type is unknown as it
+        depends on an instance that has not yet been defined.
 
     """
     if isinstance(m, (Bool, Str, Int, Float)):
         return True
-    # TODO: Handle more such as List(str), etc..
+    if isinstance(m, (ForwardInstance, ForwardTyped)):
+        # These cannot be resolved until their dependencies are available
+        return None
+    if isinstance(m, (Tuple, Set, List, Typed, Instance)):
+        types = resolve_member_types(m)
+        if types and all(t in (int, float, bool, str) for t in types):
+            return True
     return False
+
+
+def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
+    """Determine the validation types specified on a member.
+
+    Parameters
+    ----------
+    member: Member
+        The member to retrieve the type from
+    Returns
+    -------
+    types: Optional[Tuple[Model or object, ..]]
+        The member types.
+
+    """
+    if hasattr(member, "resolve"):
+        types = member.resolve()  # type: ignore
+    else:
+        types = member.validate_mode[-1]
+    if types is None:
+        return None
+    if isinstance(types, tuple):
+        return types
+    if isinstance(types, Member):
+        return resolve_member_types(types)
+    return (types,)
 
 
 class ModelSerializer(Atom):
@@ -409,9 +447,6 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
         A function optimized to restore the state for the given model class.
 
     """
-    cls.__model__
-    on_error = cls.__on_error__
-
     # Python must do some caching because using key in state and state[key]
     # seems to be faster than using get
     template = [
