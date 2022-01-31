@@ -88,7 +88,9 @@ def is_db_field(m: Member) -> bool:
 
 
 def is_primitive_member(m: Member) -> Optional[bool]:
-    """Check if the member can be serialized without calling flatten.
+    """Check if the member can be serialized without calling flatten. If the
+    member references a field that is not yet resolved it returns None
+    indicating that it cannot determine whether it is primitive yet.
 
     Parameters
     ----------
@@ -105,12 +107,26 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     """
     if isinstance(m, (Bool, Str, Int, Float)):
         return True
-    if isinstance(m, (ForwardInstance, ForwardTyped)):
+    if hasattr(m, "resolve"):
         # These cannot be resolved until their dependencies are available
         return None
     if isinstance(m, (Tuple, Set, List, Typed, Instance)):
         types = resolve_member_types(m)
-        if types and all(t in (int, float, bool, str) for t in types):
+        if not types:
+            return False  # Value can be any type
+        resolved: ListType[type] = []
+        for t in types:
+            if isinstance(t, Member):
+                if hasattr(t, "resolve"):
+                    return None  # Cannot determine now
+                subtypes = resolve_member_types(t)
+                if subtypes is None:
+                    return False  # Value can be any type
+                # TODO: Subtypes could still be unresolved
+                resolved.extend(subtypes)
+            else:
+                resolved.append(t)
+        if resolved and all(t in (int, float, bool, str) for t in resolved):
             return True
     return False
 
@@ -136,8 +152,6 @@ def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
         return None
     if isinstance(types, tuple):
         return types
-    if isinstance(types, Member):
-        return resolve_member_types(types)
     return (types,)
 
 

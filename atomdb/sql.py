@@ -66,6 +66,7 @@ from .base import (
     ScopeType,
     StateType,
     find_subclasses,
+    resolve_member_types,
 )
 
 # kwargs reserved for sqlalchemy table columns
@@ -234,29 +235,6 @@ def py_type_to_sql_column(
         f"determined automatically, please specify it manually by tagging it "
         f"with .tag(column=<sqlalchemy column>) or set `store=False`"
     )
-
-
-def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
-    """Determine the type specified on a member to determine ForeignKey
-    relations.
-
-    Parameters
-    ----------
-    member: atom.catom.Member
-        The member to retrieve the type from
-    Returns
-    -------
-    types: Optional[Tuple[Model or object, ..]]
-        The member types.
-
-    """
-    if hasattr(member, "resolve"):
-        types = member.resolve()  # type: ignore
-    else:
-        types = member.validate_mode[-1]
-    if types is None or isinstance(types, tuple):
-        return types
-    return (types,)
 
 
 def resolve_member_column(
