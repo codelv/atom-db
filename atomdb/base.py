@@ -101,9 +101,8 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     Returns
     -------
     result: Optional[bool]
-        Whether the member is a primiative type that can be intrinsicly
-        converted. If the result is None the member type is unknown as it
-        depends on an instance that has not yet been defined.
+        Whether the member is a primitive type that can be intrinsicly
+        converted.
 
     """
     if isinstance(m, (Bool, Str, Int, Float)):
@@ -111,49 +110,80 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     if hasattr(m, "resolve"):
         # These cannot be resolved until their dependencies are available
         return None
-    if isinstance(m, (Tuple, Set, List, Typed, Instance)):
-        types = resolve_member_types(m)
-        if not types:
+    if isinstance(m, (Tuple, Set, List, Typed, Instance, Dict)):
+        try:
+            types = resolve_member_types(m, resolve=False)
+        except UnresolvableError as e:
+            return None
+        if types is None:
             return False  # Value can be any type
-        resolved: ListType[type] = []
-        for t in types:
-            if isinstance(t, Member):
-                if hasattr(t, "resolve"):
-                    return None  # Cannot determine now
-                subtypes = resolve_member_types(t)
-                if subtypes is None:
-                    return False  # Value can be any type
-                # TODO: Subtypes could still be unresolved
-                resolved.extend(subtypes)
-            else:
-                resolved.append(t)
-        if resolved and all(t in (int, float, bool, str) for t in resolved):
+        if types and all(t in (int, float, bool, str) for t in types):
             return True
     return False
 
 
-def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
+def resolve_member_types(
+    member: Member, resolve: bool = True
+) -> Optional[TupleType[type, ...]]:
     """Determine the validation types specified on a member.
 
     Parameters
     ----------
     member: Member
         The member to retrieve the type from
+    resolve: bool
+        Whether to resolve "Forward" members.
     Returns
     -------
-    types: Optional[Tuple[Model or object, ..]]
-        The member types.
+    types: Optional[Tuple[Model|Member|type, ..]]
+        The member types. If types is `None` then the member does not do any
+        type validation.
+
+    Raises
+    ------
+    UnresolveableError
+        If `resolve=False` and the member has a nested forwarded member this
+        will raise an UnresolvableError with the unresolved member.
 
     """
     if hasattr(member, "resolve"):
+        if not resolve:
+            raise UnresolvableError(member)  # Do not resolve now
         types = member.resolve()  # type: ignore
     else:
         types = member.validate_mode[-1]
     if types is None:
         return None
     if isinstance(types, tuple):
-        return types
+        # Dict may have an member in the types list, so walk the types
+        # and resolve all of those.
+        resolved: list[type] = []
+        for t in types:
+            if isinstance(t, Member):
+                r = resolve_member_types(t, resolve)
+                if r is None:
+                    # TODO: Think about whether this is correct to bail out here
+                    return None
+                resolved.extend(r)
+            else:
+                resolved.append(t)
+        return tuple(resolved)
+    if isinstance(types, Member):
+        # Follow the chain. For example if the member is defined
+        # as `List(Tuple(float)))` lookup the types of the nested Tuple().
+        return resolve_member_types(types, resolve)
     return (types,)
+
+
+class UnresolvableError(Exception):
+    """Error raised when a Forwarded Member cannot be resolved at the time
+    when the resolve_member_types is called.
+
+    """
+
+    def __init__(self, member):
+        self.member = member
+        super().__init__(f"Cannot resolve {member}")
 
 
 class ModelSerializer(Atom):
@@ -630,7 +660,7 @@ class Model(Atom, metaclass=ModelMeta):
     __model__: ClassVar[str]
 
     #: Error handling
-    __on_error__: ClassVar[str] = "log"  # "drop" or "raise"
+    __on_error__: ClassVar[str] = "log"  # "ignore" or "raise"
 
     # --------------------------------------------------------------------------
     # Internal model members

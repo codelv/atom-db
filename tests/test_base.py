@@ -1,4 +1,5 @@
 import pytest
+import logging
 from atom.api import *
 from atomdb.base import (
     Model, ModelManager, ModelSerializer,
@@ -22,16 +23,26 @@ class Dummy(Model):
     list_of_int = List(int)
     list_of_str = List(str)
     list_of_any = List()
+    list_of_tuple = List(Tuple())
+    list_of_tuple_of_float = List(Tuple(float))
     tuple_of_any = Tuple()
     tuple_of_number = Tuple((float, int))
     tuple_of_int_or_model = Tuple((int, Model))
+    tuple_of_forwarded = Tuple(ForwardTyped(lambda: NotYetDefined))
     set_of_any = Tuple()
     set_of_number = Set(float)
     set_of_model = Set(AbstractModel)
-    meta = Dict()
+    dict_of_any = Dict()
+    dict_of_str_any = Dict(str)
+    dict_of_str_int = Dict(str, int)
     typed_int = Typed(int)
     typed_dict = Typed(dict)
     instance_of_model = Instance(AbstractModel)
+    forwarded_instance = ForwardInstance(lambda: NotYetDefined)
+
+
+class NotYetDefined:
+    pass
 
 
 @pytest.mark.asyncio
@@ -100,17 +111,72 @@ def test_is_db_field(attr, expected):
     ('list_of_int', True),
     ('list_of_any', False),
     ('list_of_str', True),
+    ('list_of_tuple', False),
+    ('list_of_tuple_of_float', True),
     ('tuple_of_any', False),
     ('tuple_of_number', True),
     ('tuple_of_int_or_model', False),
+    ('tuple_of_forwarded', None),
     ('set_of_any', False),
     ('set_of_number', True),
     ('set_of_model', False),
     ('typed_int', True),
     ('typed_dict', False),
     ('instance_of_model', False),
-    ('meta', False),
+    ('forwarded_instance', None),
+    ('dict_of_any', False),
+    ('dict_of_str_any', False),
+    ('dict_of_str_int', True),
 ))
 def test_is_primitive_member(attr, expected):
     member = Dummy.members()[attr]
     assert is_primitive_member(member) == expected
+
+
+@pytest.mark.asyncio
+async def test_on_error_raise():
+    """ When __on_error__ is raise any old data in the state will make the
+    restore fail.
+    """
+    class A(Model):
+        __on_error__ = 'raise'
+        value = Int()
+
+    with pytest.raises(TypeError):
+        a = await A.restore({"value": "str"})
+
+
+@pytest.mark.asyncio
+async def test_on_error_ignore():
+    """ When __on_error__ is "ignore" and setattr fails the error is discarded
+    """
+    class B(Model):
+        __on_error__ = 'ignore'
+        old_field = Int()
+        new_field = Int()
+
+    b = await B.restore({"old_field": "str", "new_field": 1})
+    assert b.old_field == 0
+    assert b.new_field == 1
+
+
+@pytest.mark.asyncio
+async def test_on_error_log(caplog):
+    """ When __on_error__ is "log" (the default) and setattr fails the error
+    is logged.
+    """
+    class C(Model):
+        old_field = Int()
+        new_field = Int()
+
+    with caplog.at_level(logging.DEBUG):
+        c = await C.restore({"old_field": "str", "new_field": 1})
+        assert c.old_field == 0
+        assert c.new_field == 1
+        assert "Error loading state:" in caplog.text
+        assert f"{C.__model__}.old_field" in caplog.text
+        assert f"object must be of type 'int'" in caplog.text
+
+
+
+
