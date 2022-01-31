@@ -157,7 +157,7 @@ def resolve_member_types(
     if isinstance(types, tuple):
         # Dict may have an member in the types list, so walk the types
         # and resolve all of those.
-        resolved: list[type] = []
+        resolved: ListType[type] = []
         for t in types:
             if isinstance(t, Member):
                 r = resolve_member_types(t, resolve)
