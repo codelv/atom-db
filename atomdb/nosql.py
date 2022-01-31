@@ -131,9 +131,9 @@ class NoSQLModel(Model):
         """
         pk = state["_id"]
 
-        cache = cls.objects.cache
         if pk is not None:
             # Check if this is in the cache
+            cache = cls.objects.cache
             obj = cache.get(pk)
         else:
             obj = None
