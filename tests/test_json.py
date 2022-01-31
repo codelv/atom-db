@@ -90,6 +90,7 @@ async def test_json_list():
     now = datetime.now()
     obj = Page(files=[f1, f2], created=now)
     state = obj.__getstate__()
+    assert isinstance(state['created'], float)  # Make sure conversion occurred
     data = json.dumps(state)
     r = await Page.restore(json.loads(data))
     assert r.created == now
