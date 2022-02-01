@@ -32,7 +32,8 @@ class Page(JSONModel):
     files = List(File)
     created = Instance(datetime).tag(
         flatten=lambda d, scope: d.timestamp(),
-        unflatten=lambda v, scope: datetime.fromtimestamp(v) if v else None)
+        unflatten=lambda v, scope: datetime.fromtimestamp(v) if v else None,
+    )
 
 
 class Tree(JSONModel):
@@ -90,7 +91,7 @@ async def test_json_list():
     now = datetime.now()
     obj = Page(files=[f1, f2], created=now)
     state = obj.__getstate__()
-    assert isinstance(state['created'], float)  # Make sure conversion occurred
+    assert isinstance(state["created"], float)  # Make sure conversion occurred
     data = json.dumps(state)
     r = await Page.restore(json.loads(data))
     assert r.created == now

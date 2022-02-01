@@ -49,4 +49,3 @@ def test_restore(benchmark, event_loop):
         event_loop.run_until_complete(Product.restore(state))
 
     benchmark(run)
-

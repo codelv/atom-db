@@ -2,8 +2,12 @@ import pytest
 import logging
 from atom.api import *
 from atomdb.base import (
-    Model, ModelManager, ModelSerializer,
-    is_db_field, is_primitive_member
+    Model,
+    ModelManager,
+    ModelSerializer,
+    is_db_field,
+    is_primitive_member,
+    generate_function,
 )
 
 
@@ -94,52 +98,73 @@ async def test_model():
     obj = await AbstractModel.restore(state)
 
 
-@pytest.mark.parametrize('attr, expected', (
-    ('id', True),
-    ('_private', False),
-    ('computed', False),
-))
+@pytest.mark.parametrize(
+    "attr, expected",
+    (
+        ("id", True),
+        ("_private", False),
+        ("computed", False),
+    ),
+)
 def test_is_db_field(attr, expected):
     member = Dummy.members()[attr]
     assert is_db_field(member) == expected
 
 
-@pytest.mark.parametrize('attr, expected', (
-    ('id', True),
-    ('enabled', True),
-    ('string', True),
-    ('list_of_int', True),
-    ('list_of_any', False),
-    ('list_of_str', True),
-    ('list_of_tuple', False),
-    ('list_of_tuple_of_float', True),
-    ('tuple_of_any', False),
-    ('tuple_of_number', True),
-    ('tuple_of_int_or_model', False),
-    ('tuple_of_forwarded', None),
-    ('set_of_any', False),
-    ('set_of_number', True),
-    ('set_of_model', False),
-    ('typed_int', True),
-    ('typed_dict', False),
-    ('instance_of_model', False),
-    ('forwarded_instance', None),
-    ('dict_of_any', False),
-    ('dict_of_str_any', False),
-    ('dict_of_str_int', True),
-))
+@pytest.mark.parametrize(
+    "attr, expected",
+    (
+        ("id", True),
+        ("enabled", True),
+        ("string", True),
+        ("list_of_int", True),
+        ("list_of_any", False),
+        ("list_of_str", True),
+        ("list_of_tuple", False),
+        ("list_of_tuple_of_float", True),
+        ("tuple_of_any", False),
+        ("tuple_of_number", True),
+        ("tuple_of_int_or_model", False),
+        ("tuple_of_forwarded", None),
+        ("set_of_any", False),
+        ("set_of_number", True),
+        ("set_of_model", False),
+        ("typed_int", True),
+        ("typed_dict", False),
+        ("instance_of_model", False),
+        ("forwarded_instance", None),
+        ("dict_of_any", False),
+        ("dict_of_str_any", False),
+        ("dict_of_str_int", True),
+    ),
+)
 def test_is_primitive_member(attr, expected):
     member = Dummy.members()[attr]
     assert is_primitive_member(member) == expected
 
 
+def test_gen_fn():
+    fn = generate_function(
+        "\n".join(("def foo(v):", "    return str(v)")),
+        {"str": str},
+        "foo",
+    )
+    assert callable(fn)
+    assert fn(1) == "1"
+
+    # Not a fn
+    with pytest.raises(RuntimeError):
+        generate_function('__import__("os").path.exists()', {}, "__import__")
+
+
 @pytest.mark.asyncio
 async def test_on_error_raise():
-    """ When __on_error__ is raise any old data in the state will make the
+    """When __on_error__ is raise any old data in the state will make the
     restore fail.
     """
+
     class A(Model):
-        __on_error__ = 'raise'
+        __on_error__ = "raise"
         value = Int()
 
     with pytest.raises(TypeError):
@@ -148,10 +173,10 @@ async def test_on_error_raise():
 
 @pytest.mark.asyncio
 async def test_on_error_ignore():
-    """ When __on_error__ is "ignore" and setattr fails the error is discarded
-    """
+    """When __on_error__ is "ignore" and setattr fails the error is discarded"""
+
     class B(Model):
-        __on_error__ = 'ignore'
+        __on_error__ = "ignore"
         old_field = Int()
         new_field = Int()
 
@@ -162,9 +187,10 @@ async def test_on_error_ignore():
 
 @pytest.mark.asyncio
 async def test_on_error_log(caplog):
-    """ When __on_error__ is "log" (the default) and setattr fails the error
+    """When __on_error__ is "log" (the default) and setattr fails the error
     is logged.
     """
+
     class C(Model):
         old_field = Int()
         new_field = Int()
@@ -176,7 +202,3 @@ async def test_on_error_log(caplog):
         assert "Error loading state:" in caplog.text
         assert f"{C.__model__}.old_field" in caplog.text
         assert f"object must be of type 'int'" in caplog.text
-
-
-
-

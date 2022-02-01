@@ -1,13 +1,11 @@
 """
-Copyright (c) 2018-2021, Jairus Martin.
+Copyright (c) 2018-2022, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
 The full license is in the file LICENSE.text, distributed with this software.
 
 Created on Jun 12, 2018
-
-@author: jrm
 """
 import os
 import asyncio
@@ -51,9 +49,9 @@ T = TypeVar("T")
 M = TypeVar("M", bound="Model")
 ScopeType = DictType[Union[str, bytes], Any]
 StateType = DictType[str, Any]
-logger = logging.getLogger("atomdb")
 GetStateFn = Callable[[M, Optional[ScopeType]], StateType]
 RestoreStateFn = Callable[[M, StateType, Optional[ScopeType]], None]
+log = logging.getLogger("atomdb")
 
 
 def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
@@ -526,7 +524,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
         # Allow  tagging a custom unflatten fn
         unflatten = meta.get("unflatten", default_unflatten)
 
-        setters.append((order, f, unflatten))
+        setters.append((order, f, m, unflatten))
     setters.sort(key=lambda it: it[0])
 
     on_error = cls.__on_error__
@@ -534,12 +532,12 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
     namespace = {
         "default_unflatten": default_unflatten,
     }
-    for order, f, unflatten in setters:
+    for order, f, m, unflatten in setters:
         # Since f is potentially an untrusted input, make sure it is a valid
         # python identifier to prevent unintended code being generated.
         if not f.isidentifier():
             raise ValueError(f"Field '{f}' cannot be used for code generation")
-        m = members[f]
+
         template.append(f"if '{f}' in state:")
 
         # Determine the expresion to unflatten the value
@@ -739,7 +737,7 @@ class Model(Atom, metaclass=ModelMeta):
 
         """
         obj = state.get(k)
-        logger.debug(
+        log.warning(
             f"Error loading state:"
             f"{self.__model__}.{k} = {pformat(obj)}:"
             f"\nSelf: {self.__ref__}: {scope.get(self.__ref__)}"
