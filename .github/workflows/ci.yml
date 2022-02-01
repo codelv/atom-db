@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U aiopg 'sqlalchemy<1.4' codecov pytest pytest-coverage pytest-asyncio faker
+        run: pip install -U aiopg 'sqlalchemy<1.4' codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
@@ -68,7 +68,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U aiomysql 'sqlalchemy<1.4' codecov pytest pytest-coverage pytest-asyncio faker
+        run: pip install -U aiomysql 'sqlalchemy<1.4' codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
@@ -96,7 +96,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U motor codecov pytest pytest-coverage pytest-asyncio faker
+        run: pip install -U motor codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
