@@ -22,6 +22,7 @@ from base64 import b64encode, b64decode
 from datetime import date, time, datetime
 from decimal import Decimal
 from uuid import UUID
+from bytecode import Bytecode, Instr, Label
 from atom.api import (
     Atom,
     AtomMeta,
@@ -578,7 +579,9 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
     return generate_function(source, namespace, "__restorestate__")
 
 
-def generate_function(source: str, namespace: DictType[str, Any], fn_name: str):
+def generate_function(
+    source: str, namespace: DictType[str, Any], fn_name: str, optimize: bool = True
+) -> Callable[..., Any]:
     """Generate an optimized function
 
     Parameters
@@ -605,11 +608,20 @@ def generate_function(source: str, namespace: DictType[str, Any], fn_name: str):
     except Exception as e:
         raise RuntimeError(f"Could not generate code: {e}:\n{source}")
 
-    # TODO: Use byteplay to rewrite globals to load fast
-
     result: DictType[str, Any] = {}
     exec(code, namespace, result)
-    return result[fn_name]  # type: ignore
+
+    # Optimize global access
+    fn = result[fn_name]
+    if optimize:
+        bc = Bytecode.from_code(fn.__code__)
+        for i, inst in enumerate(bc):
+            if isinstance(inst, Label):
+                continue
+            if inst.name == "LOAD_GLOBAL" and inst.arg in namespace:
+                bc[i] = Instr("LOAD_CONST", namespace[inst.arg])
+        fn.__code__ = bc.to_code()
+    return fn
 
 
 class ModelMeta(AtomMeta):

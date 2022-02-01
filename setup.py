@@ -23,10 +23,10 @@ setup(
     long_description_content_type="text/markdown",
     requires=['atom'],
     python_requires='>=3.7',
-    install_requires=['atom>=0.7.0'],
+    install_requires=['atom>=0.7.0', 'bytecode'],
     optional_requires=[
         'sqlalchemy', 'aiomysql', 'aiopg',  'aiosqlite',  # sql database support
-        'motor', 'txmongo'  # nosql database support
+        'motor', # nosql database support
     ],
     packages=find_packages(),
 )
