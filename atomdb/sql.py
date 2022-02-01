@@ -1365,8 +1365,8 @@ class SQLBinding(Atom):
 
 async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[T]:
     """Retrieve a model from the cache using the given pk. If the cached
-    cache does not exist attempt to restore it from the state otherwise create
-    a model that has not been loaded.
+    object does not exist attempt to restore it from the state otherwise create
+    a model that has not been loaded and only contains the id.
 
     Parameters
     ----------
