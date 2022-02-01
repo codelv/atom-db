@@ -145,6 +145,7 @@ def resolve_member_types(
         will raise an UnresolvableError with the unresolved member.
 
     """
+    # TODO: This should really use the validate mode...
     if hasattr(member, "resolve"):
         if not resolve:
             raise UnresolvableError(member)  # Do not resolve now
@@ -173,6 +174,8 @@ def resolve_member_types(
         # Follow the chain. For example if the member is defined
         # as `List(Tuple(float)))` lookup the types of the nested Tuple().
         return resolve_member_types(types, resolve)
+    if isinstance(types, str):
+        return None  # Custom validation method
     return (types,)
 
 
