@@ -1176,7 +1176,7 @@ def test_abstract_tables():
 def test_benchmark(db, event_loop, benchmark):
     event_loop.run_until_complete(reset_tables(Image))
 
-    for i in range(10):
+    for i in range(1000):
         event_loop.run_until_complete(Image.objects.create(
             name=f"Image {i}",
             path=f"/media/some/path/{i}",
