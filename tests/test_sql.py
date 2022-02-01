@@ -28,8 +28,7 @@ try:
     else:
         from psycopg2.errors import UniqueViolation as IntegrityError
 except ImportError as e:
-    raise
-    # pytest.skip("aiomysql and aiopg not available", allow_module_level=True)
+    pytest.skip("aiomysql and aiopg not available", allow_module_level=True)
 
 IS_MYSQL = DATABASE_URL.startswith("mysql")
 
