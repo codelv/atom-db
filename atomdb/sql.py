@@ -1383,9 +1383,9 @@ async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[
         If the pk is not None an instance of cls.
 
     """
-    if cls.__joined_pk__ in state and state[cls.__joined_pk__] is not None:
+    if cls.__joined_pk__ in state and state[cls.__joined_pk__]:
         return await cls.restore(state)
-    if pk is None:
+    if not pk:
         return None
     cache = cls.objects.cache
     obj = cache.get(pk)
@@ -1563,8 +1563,11 @@ class SQLMeta(ModelMeta):
             # Reassign the _id field to the primary key member.
             cls._id = members["_id"] = pk
 
-            # Remove "_id" from the fields list as it is now an alias
-            cls.__fields__ = [f for f in cls.__fields__ if f != "_id"]
+        # Ensure proper pk name is fields list
+        if pk.name != "_id" and "_id" in cls.__fields__:
+            cls.__fields__.remove("_id")
+        if pk.name not in cls.__fields__:
+            cls.__fields__.insert(0, pk.name)
 
         # Check that the atom member indexes are still valid after
         # reassinging to avoid a bug in the past.
@@ -1613,7 +1616,7 @@ class SQLMeta(ModelMeta):
             elif getattr(Meta, "abstract", None) is None:
                 Meta.abstract = False
 
-        # Set the pk name
+        # Set the pk name after table is set
         cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
         cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
 
@@ -1626,7 +1629,6 @@ class SQLMeta(ModelMeta):
         }
         if cls.__pk__ != "_id":
             excluded_fields.add("_id")
-
         for name, member in cls.members().items():
             if isinstance(member, Relation):
                 excluded_fields.add(name)
@@ -1672,9 +1674,6 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Database name. If the `database` field of the manager is a dict
     #: This field will be used to determine which engine to use.
     __database__: ClassVar[str] = "default"
-
-    #: If no other member is tagged with primary_key=True this is used
-    _id = Typed(int).tag(store=True, primary_key=True)
 
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
@@ -1761,7 +1760,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
         """
         skip = self.__restored__ and not reload and not fields
-        if skip or self._id is None:
+        if skip or not self._id:
             return  # Already loaded or won't do anything
         db = self.objects
         t = db.table

@@ -128,8 +128,7 @@ class NoSQLModel(Model):
         use that instead.
         """
         pk = state["_id"]
-
-        if pk is not None:
+        if pk:
             # Check if this is in the cache
             cache = cls.objects.cache
             obj = cache.get(pk)
@@ -140,7 +139,7 @@ class NoSQLModel(Model):
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            if pk is not None:
+            if pk:
                 cache[pk] = obj
             restore = True
         else:

@@ -109,7 +109,7 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     if hasattr(m, "resolve"):
         # These cannot be resolved until their dependencies are available
         return None
-    if isinstance(m, (Tuple, Set, List, Typed, Instance, Dict)):
+    if isinstance(m, (Tuple, Set, List, Typed, Instance, Dict, Coerced)):
         try:
             types = resolve_member_types(m, resolve=False)
         except UnresolvableError as e:
@@ -149,6 +149,8 @@ def resolve_member_types(
         if not resolve:
             raise UnresolvableError(member)  # Do not resolve now
         types = member.resolve()  # type: ignore
+    elif isinstance(member, Coerced):
+        types = member.validate_mode[-1][0]
     else:
         types = member.validate_mode[-1]
     if types is None:
@@ -278,29 +280,27 @@ class ModelSerializer(Atom):
             The unflattened object
 
         """
-        unflatten = self.unflatten
-        scope = scope or {}
         if isinstance(v, dict):
             # Circular reference
-            ref = v.get("__ref__")
-            if ref is not None and ref in scope:
-                return scope[ref]
+            if scope and "__ref__" in v:
+                ref = v["__ref__"]
+                if ref in scope:
+                    return scope[ref]
 
             # Create the object
-            name = v.get("__model__")
-            if name is not None:
-                cls = self.registry[name]
+            if "__model__" in v:
+                cls = self.registry[v["__model__"]]
                 return await cls.serializer.unflatten_object(cls, v, scope)
 
             # Convert py types
-            py_type = v.pop("__py__", None)
-            if py_type:
-                coercer = self.coercers.get(py_type)
+            if "__py__" in v:
+                coercer = self.coercers.get(v.pop("__py__"))
                 if coercer:
                     return coercer(v)
-
+            unflatten = self.unflatten
             return {k: await unflatten(i, scope) for k, i in v.items()}
         elif isinstance(v, (list, tuple)):
+            unflatten = self.unflatten
             return [await unflatten(item, scope) for item in v]
         return v
 
@@ -325,7 +325,6 @@ class ModelSerializer(Atom):
             or None if this object does not exist in the database.
         """
         _id = state.get("_id")
-        ref = state.get("__ref__")
 
         # Get the object for this id, retrieve from cache if needed
         obj, created = await self.get_or_create(cls, state, scope)
@@ -340,8 +339,8 @@ class ModelSerializer(Atom):
         # Child objects may have circular references to this object
         # so we must update the scope with this reference to handle this
         # before restoring any children
-        if ref is not None:
-            scope[ref] = obj
+        if scope and "__ref__" in state:
+            scope[state['__ref__']] = obj
 
         # If not restoring from cache update the state
         if created:
@@ -504,8 +503,8 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
         "    raise ValueError(",
         "        f'Trying to use {name} state for {self.__model__} object'",
         "    )",
-        "scope = scope or {}",
         "if '__ref__' in state and state['__ref__'] is not None:",
+        "    scope = scope or {}",
         "    scope[state['__ref__']] = self",
     ]
 
@@ -530,7 +529,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
     on_error = cls.__on_error__
 
-    namespace = {
+    namespace: DictType[str, Any] = {
         "default_unflatten": default_unflatten,
     }
     for order, f, m, unflatten in setters:
@@ -543,7 +542,18 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
         # Determine the expresion to unflatten the value
         if unflatten is default_unflatten:
-            if is_primitive_member(m):
+            RelModel = None
+            # If the member is typed we can shortcut looking up the __model__
+            # type from the state and restore it directly.
+            # Note that this does not work for instances.
+            if isinstance(m, Typed):
+                types = resolve_member_types(m, resolve=False)
+                if types and len(types) == 1 and issubclass(types[0], Model):
+                    RelModel = types[0]
+            if RelModel is not None:
+                namespace[f"rel_model_{f}"] = RelModel
+                expr = f"await rel_model_{f}.restore(state['{f}'])"
+            elif is_primitive_member(m):
                 # Direct assignment
                 expr = f"state['{f}']"
             else:
@@ -613,6 +623,7 @@ def generate_function(
 
     # Optimize global access
     fn = result[fn_name]
+    fn.__source__ = source
     if optimize:
         bc = Bytecode.from_code(fn.__code__)
         for i, inst in enumerate(bc):
@@ -677,10 +688,10 @@ class Model(Atom, metaclass=ModelMeta):
     # --------------------------------------------------------------------------
 
     #: ID of this object in the database. Subclasses can redefine this as needed
-    _id = Bytes()  # type: Any
+    _id = Int().tag(primary_key=True)  # type: Any
 
     #: A unique ID used to handle cyclical serialization and deserialization
-    __ref__ = Bytes(factory=lambda: b"%0x" % getrandbits(30 * 4))  # type: Any
+    __ref__ = Int(factory=lambda: getrandbits(32))  # type: Any
 
     #: Flag to indicate if this model has been restored or saved
     __restored__ = Bool().tag(store=False)
@@ -742,7 +753,7 @@ class Model(Atom, metaclass=ModelMeta):
         await self.__generated_restorestate__(state, scope)  # type: ignore
 
     def __log_restore_error__(
-        self, e: Exception, k: str, state: StateType, scope: ScopeType
+        self, e: Exception, k: str, state: StateType, scope: Optional[ScopeType]
     ):
         """Log details when restoring a member fails. This typically only will
         occur if the state has data from an old model after a schema change.
@@ -752,7 +763,7 @@ class Model(Atom, metaclass=ModelMeta):
         log.warning(
             f"Error loading state:"
             f"{self.__model__}.{k} = {pformat(obj)}:"
-            f"\nSelf: {self.__ref__}: {scope.get(self.__ref__)}"
+            f"\nRef: {self.__ref__}"
             f"\nScope: {pformat(scope)}"
             f"\nState: {pformat(state)}"
             f"\n{e}"
@@ -845,8 +856,4 @@ class JSONModel(Model):
     """
 
     serializer = JSONSerializer.instance()
-
-    #: JSON cannot encode bytes
-    _id = Str()
-    __ref__ = Str(factory=lambda: (b"%0x" % getrandbits(30 * 4)).decode())
     __restored__ = set_default(True)  # type: ignore

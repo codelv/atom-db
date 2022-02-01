@@ -43,6 +43,7 @@ class Dummy(Model):
     typed_dict = Typed(dict)
     instance_of_model = Instance(AbstractModel)
     forwarded_instance = ForwardInstance(lambda: NotYetDefined)
+    coerced_int = Coerced(int)
 
 
 class NotYetDefined:
@@ -136,6 +137,7 @@ def test_is_db_field(attr, expected):
         ("dict_of_any", False),
         ("dict_of_str_any", False),
         ("dict_of_str_int", True),
+        ("coerced_int", True),
     ),
 )
 def test_is_primitive_member(attr, expected):
