@@ -112,7 +112,7 @@ class Image(SQLModel):
     data = Instance(bytes).tag(nullable=True)
 
     # Maps to sa.ARRAY, must include the item_type tag
-    size = Tuple(int).tag(nullable=True)
+    # size = Tuple(int).tag(nullable=True)
 
     #: Maps to sa.JSON
     info = Instance(ImageInfo, ())
@@ -1181,7 +1181,7 @@ def test_benchmark(db, event_loop, benchmark):
             name=f"Image {i}",
             path=f"/media/some/path/{i}",
             alpha=i % 255,
-            size=(320, 240),
+            # size=(320, 240),
             data=b'12345678',
             metadata={"tag": "sunset"},
         ))
