@@ -27,6 +27,7 @@ class Product(Model):
     meta = Dict()
 
 
+@pytest.mark.benchmark(group="base")
 def test_serialize(benchmark):
     product = Product(
         title="This is a test",
@@ -44,6 +45,7 @@ def test_serialize(benchmark):
     benchmark(product.__getstate__)
 
 
+@pytest.mark.benchmark(group="base")
 def test_restore(benchmark, event_loop):
     def run():
         event_loop.run_until_complete(Product.restore(state))

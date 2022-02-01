@@ -113,7 +113,7 @@ class Image(SQLModel):
     data = Instance(bytes).tag(nullable=True)
 
     # Maps to sa.ARRAY, must include the item_type tag
-    size = Tuple(int).tag(nullable=True)
+    # size = Tuple(int).tag(nullable=True)
 
     #: Maps to sa.JSON
     info = Instance(ImageInfo, ())
@@ -1265,15 +1265,16 @@ def test_abstract_tables():
     CustomUser3.objects
 
 
+@pytest.mark.benchmark(group="sql")
 def test_benchmark(db, event_loop, benchmark):
     event_loop.run_until_complete(reset_tables(Image))
 
-    for i in range(1000):
+    for i in range(10):
         event_loop.run_until_complete(Image.objects.create(
             name=f"Image {i}",
             path=f"/media/some/path/{i}",
             alpha=i % 255,
-            size=(320, 240),
+            #size=(320, 240),
             data=b'12345678',
             metadata={"tag": "sunset"},
         ))
