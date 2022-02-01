@@ -340,7 +340,7 @@ class ModelSerializer(Atom):
         # so we must update the scope with this reference to handle this
         # before restoring any children
         if scope and "__ref__" in state:
-            scope[state['__ref__']] = obj
+            scope[state["__ref__"]] = obj
 
         # If not restoring from cache update the state
         if created:
