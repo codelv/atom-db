@@ -1446,7 +1446,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
         else:
             col = f
         k = f"{table_name}_{col}"
-        # Since f and k are potentially an untrusted input, make sure they are
+        # Since f, col, and k are potentially an untrusted input, make sure they are
         # valid python identifiers to prevent unintended code being generated.
         if not f.isidentifier():
             raise ValueError(f"Field '{f}' cannot be used for code generation")
@@ -1455,7 +1455,18 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
         if not k.replace(".", "_").isidentifier():
             raise ValueError(f"Key '{k}' cannot be used for code generation")
 
-        if col in cls.__fields__ and not isinstance(m, Relation):
+        if not col.isidentifier():
+            raise ValueError(f"Renamed '{col}' cannot be used for code generation")
+
+        # TODO: Is there a better way to check for multiple keys?
+        if f in cls.__renamed_fields__:
+            # Make sure renamed fields are checked for
+            template.append(f"if '{col}' in state or '{k}' in state or '{f}' in state:")
+            template.append(
+                f"    v = state['{col}' if '{col}' in state else ("
+                f"'{k}' if '{k}' in state else '{f}')]"
+            )
+        elif col in cls.__fields__ and not isinstance(m, Relation):
             # Expression to retrieve the value
             # Always check the joined type first
             template.append(f"if '{f}' in state or '{k}' in state:")

@@ -584,7 +584,14 @@ async def test_query_renamed_pk(db):
     email = await Email.objects.create(
         to="bob@example.com", from_="alice@example.com", body="Hello ;)"
     )
-    assert await Email.objects.get(id=email._id) is email
+    email_id = email._id
+    assert await Email.objects.get(id=email_id) is email
+    del email
+    gc.collect()
+
+    # Make sure renamed field is restored
+    email = await Email.objects.get(id=email_id)
+    assert email.from_ == "alice@example.com"
 
 
 @pytest.mark.asyncio
@@ -1269,14 +1276,16 @@ def test_benchmark(db, event_loop, benchmark):
     event_loop.run_until_complete(reset_tables(Image))
 
     for i in range(1000):
-        event_loop.run_until_complete(Image.objects.create(
-            name=f"Image {i}",
-            path=f"/media/some/path/{i}",
-            alpha=i % 255,
-            #size=(320, 240),
-            data=b'12345678',
-            metadata={"tag": "sunset"},
-        ))
+        event_loop.run_until_complete(
+            Image.objects.create(
+                name=f"Image {i}",
+                path=f"/media/some/path/{i}",
+                alpha=i % 255,
+                # size=(320, 240),
+                data=b"12345678",
+                metadata={"tag": "sunset"},
+            )
+        )
 
     def run():
         event_loop.run_until_complete(Image.objects.all())

@@ -8,5 +8,6 @@ typecheck:
 
 reformat:
 	black atomdb
+	black tests
 
 precommit: isort reformat typecheck
