@@ -1,13 +1,11 @@
 """
-Copyright (c) 2018-2020, Jairus Martin.
+Copyright (c) 2018-2022, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
 The full license is in the file LICENSE.text, distributed with this software.
 
 Created on Jun 12, 2018
-
-@author: jrm
 """
 import weakref
 import bson
@@ -28,11 +26,14 @@ class NoSQLModelSerializer(ModelSerializer):
         # Check if this is in the cache
         pk = state.get("_id")
         cache = cls.objects.cache
-        obj = cache.get(pk)
+        if pk is not None:
+            obj = cache.get(pk)
+        else:
+            obj = None
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            if pk:
+            if pk is not None:
                 cache[pk] = obj
 
             # This ideally should only be done if created
@@ -127,18 +128,24 @@ class NoSQLModel(Model):
         use that instead.
         """
         pk = state["_id"]
+        if pk:
+            # Check if this is in the cache
+            cache = cls.objects.cache
+            obj = cache.get(pk)
+        else:
+            obj = None
 
-        # Check if this is in the cache
-        cache = cls.objects.cache
-        obj = cache.get(pk)
+        # Restore
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            cache[pk] = obj
+            if pk:
+                cache[pk] = obj
+            restore = True
+        else:
+            restore = force
 
-            # This ideally should only be done if created
-            await obj.__restorestate__(state)
-        elif force:
+        if restore:
             await obj.__restorestate__(state)
 
         return obj

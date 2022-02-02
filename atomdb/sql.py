@@ -1,13 +1,11 @@
 """
-Copyright (c) 2018-2020, Jairus Martin.
+Copyright (c) 2018-2022, Jairus Martin.
 
 Distributed under the terms of the MIT License.
 
 The full license is in the file LICENSE.txt, distributed with this software.
 
 Created on Aug 2, 2018
-
-@author: jrm
 """
 import os
 import logging
@@ -65,7 +63,11 @@ from .base import (
     JSONSerializer,
     ScopeType,
     StateType,
+    RestoreStateFn,
     find_subclasses,
+    is_primitive_member,
+    resolve_member_types,
+    generate_function,
 )
 
 # kwargs reserved for sqlalchemy table columns
@@ -236,29 +238,6 @@ def py_type_to_sql_column(
     )
 
 
-def resolve_member_types(member: Member) -> Optional[TupleType[type, ...]]:
-    """Determine the type specified on a member to determine ForeignKey
-    relations.
-
-    Parameters
-    ----------
-    member: atom.catom.Member
-        The member to retrieve the type from
-    Returns
-    -------
-    types: Optional[Tuple[Model or object, ..]]
-        The member types.
-
-    """
-    if hasattr(member, "resolve"):
-        types = member.resolve()  # type: ignore
-    else:
-        types = member.validate_mode[-1]
-    if types is None or isinstance(types, tuple):
-        return types
-    return (types,)
-
-
 def resolve_member_column(
     model: Type["SQLModel"], field: str, related_clauses: Optional[ListType[str]] = None
 ) -> sa.Column:
@@ -323,6 +302,36 @@ def resolve_member_column(
     if col is None:
         raise ValueError("Invalid field %s on %s" % (field, model))
     return col
+
+
+def resolve_relation(
+    model: Type["SQLModel"], field: str
+) -> TupleType[Type[Model], Member]:
+    """Lookup a Relation.
+
+    Parameters
+    ----------
+    model: SQLModel
+        The model to lookup.
+    field: str
+        Path to a Relation member
+
+    Returns
+    -------
+    result: tuple[SQLModel, Member]
+        The model this field refers to and the member on that model that is
+        a foreign key to model.
+
+    """
+    relation = model.members().get(field)
+    if isinstance(relation, Relation):
+        RelModel = cast(Relation, relation).to
+        # Find the referring member
+        # TODO: This does not support multiple backrefs
+        for other_model, referring_member in model.__backrefs__:
+            if RelModel is other_model:
+                return (other_model, referring_member)
+    raise ValueError("Invalid prefetch relation '%s' from %s" % (field, model))
 
 
 def atom_member_to_sql_column(
@@ -604,11 +613,22 @@ class SQLModelManager(ModelManager):
         for cls in find_sql_models():
             table = cls.__table__
             if table is None:
-                table = cls.__table__ = create_table(cls, self.metadata)
+                table = self.create_table_and_restore_fn(cls)
             if not table.metadata.bind:
                 table.metadata.bind = SQLBinding(manager=self, table=table)
             tables[cls] = table
         return tables
+
+    def create_table_and_restore_fn(self, cls: Type["SQLModel"]) -> sa.Table:
+        """Generate the sqlalchemy table and optimized restore function.
+        This is done here to make sure that foreign and forwarded members
+        are now resolved.
+
+        """
+        assert cls.__table__ is None
+        table = cls.__table__ = create_table(cls, self.metadata)
+        cls.__generated_restorestate__ = generate_sql_restorestate(cls)
+        return table
 
     def __get__(
         self, obj: T, cls: Optional[Type[T]] = None
@@ -621,7 +641,7 @@ class SQLModelManager(ModelManager):
         if proxy is None:
             table = cls.__table__
             if table is None:
-                table = cls.__table__ = create_table(cls, self.metadata)
+                table = self.create_table_and_restore_fn(cls)
             proxy = self.proxies[cls] = SQLTableProxy(table=table, model=cls)
         return proxy
 
@@ -847,6 +867,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
     filter_clauses = List()
     related_clauses = List()
+    prefetch_clauses = List()
     outer_join = Bool()
     order_clauses = List()
     distinct_clauses = List()
@@ -934,6 +955,23 @@ class SQLQuerySet(Atom, Generic[T]):
         outer_join = self.outer_join if outer_join is None else outer_join
         related_clauses = self.related_clauses + list(related)
         return self.clone(related_clauses=related_clauses, outer_join=outer_join)
+
+    def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
+        """Define related fields to prefetch in a separate query.
+
+        Parameters
+        ----------
+        args: List[str]
+            List of related fields fetchs
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the prefetch fields added.
+
+        """
+        prefetch_clauses = self.prefetch_clauses + list(related)
+        return self.clone(prefetch_clauses=prefetch_clauses)
 
     def order_by(self, *args):
         """Order the query by the given fields.
@@ -1190,10 +1228,11 @@ class SQLQuerySet(Atom, Generic[T]):
     async def all(self, *args, **kwargs) -> Sequence[T]:
         if args or kwargs:
             return await self.filter(*args, **kwargs).all()
+        cache = await self.prefetch()
         q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
-        return [cast(T, await restore(row)) for row in cursor]
+        return [cast(T, await restore(row, prefetched=cache)) for row in cursor]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
         """Get the first result matching the query. Unlike django this will
@@ -1212,7 +1251,41 @@ class SQLQuerySet(Atom, Generic[T]):
         row = await self.proxy.fetchone(q, connection=self.connection)
         if row is None:
             return None
-        return cast(T, await self.proxy.model.restore(row))
+        cache = await self.prefetch()
+        return cast(T, await self.proxy.model.restore(row, prefetched=cache))
+
+    async def prefetch(self) -> Optional[DictType[Any, StateType]]:
+        """Perform a prefetch lookup and populate the cache."""
+        if not self.prefetch_clauses:
+            return None
+
+        # Cache is a mapping of this model's pk to related member field values
+        cache: DictType[Any, StateType] = {}
+
+        model = self.proxy.model
+        sub_query = self.query("select", model.objects.table.c[model.__pk__])
+
+        # Perform a query for each related field
+        for field in self.prefetch_clauses:
+            #: TDOO: This only works with a single relation
+            RelModel, ref_member = resolve_relation(model, field)
+            name = (ref_member.metadata or {}).get("name", ref_member.name)
+            rel_col = RelModel.objects.table.c[name]
+            results = await RelModel.objects.filter(rel_col.in_(sub_query))
+
+            # Group the results by the this models pk
+            # Eg if Email.attachments is a relation to Attachments
+            # This will group by the Email value
+            for r in results:
+                pk = ref_member.get_slot(r)._id
+                prefetched_state = cache.get(pk)
+                if prefetched_state is None:
+                    prefetched_state = cache[pk] = {field: []}
+                relation_values = prefetched_state.get(field)
+                if relation_values is None:
+                    relation_values = prefetched_state[field] = []
+                relation_values.append(r)
+        return cache
 
 
 class SQLBinding(Atom):
@@ -1290,6 +1363,173 @@ class SQLBinding(Atom):
         return result
 
 
+async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[T]:
+    """Retrieve a model from the cache using the given pk. If the cached
+    object does not exist attempt to restore it from the state otherwise create
+    a model that has not been loaded and only contains the id.
+
+    Parameters
+    ----------
+    cls: Type[SQLModel]
+        The class to lookup.
+    pk: Any
+        The primary key to look for.
+    state: StateType
+        The state from a join query.
+
+    Returns
+    -------
+    obj: Optional[SQLModel]
+        If the pk is not None an instance of cls.
+
+    """
+    if cls.__joined_pk__ in state and state[cls.__joined_pk__]:
+        return await cls.restore(state)
+    if not pk:
+        return None
+    cache = cls.objects.cache
+    obj = cache.get(pk)
+    if obj is not None:
+        return obj
+    # Create an unloaded model
+    obj = cls.__new__(cls)
+    cache[pk] = obj
+    obj._id = pk
+    return obj
+
+
+def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
+    """Generate an optimized restore function for the SQL model. The generated
+    function creates "inline" dict key lookups for the table columns that
+    may have been joined or renamed. This avoids having to do this at runtime.
+
+    """
+    template = [
+        "async def __restorestate__(self, state, scope=None):",
+        "if '__model__' in state and state['__model__'] != self.__model__:",
+        "    name = state['__model__']",
+        "    raise ValueError(",
+        "        f'Trying to use {name} state for {self.__model__} object'",
+        "    )",
+        "scope = scope or {}",
+        "if '__ref__' in state and state['__ref__'] is not None:",
+        "    scope[state['__ref__']] = self",
+    ]
+
+    on_error = cls.__on_error__
+    default_unflatten = cls.serializer.unflatten
+    setters = []
+    excluded = {"__model__", "__ref__", "__restored__"}
+    for f, m in cls.members().items():
+        if f in excluded:
+            continue
+        meta = m.metadata or {}
+        order = meta.get("setstate_order", 1000)
+
+        # Allow  tagging a custom unflatten fn
+        unflatten = meta.get("unflatten", default_unflatten)
+
+        setters.append((order, f, m, unflatten))
+    setters.sort(key=lambda it: it[0])
+
+    namespace: DictType[str, Any] = {
+        "default_unflatten": default_unflatten,
+        "get_cached_model": get_cached_model,
+    }
+
+    # The state dict may have data from multiple tables that have been joined
+    # together. This handles that case.
+    table_name = cls.__model__
+    for order, f, m, unflatten in setters:
+        if m.metadata is not None:
+            col = m.metadata.get("name", f)
+        else:
+            col = f
+        k = f"{table_name}_{col}"
+        # Since f, col, and k are potentially an untrusted input, make sure they are
+        # valid python identifiers to prevent unintended code being generated.
+        if not f.isidentifier():
+            raise ValueError(f"Field '{f}' cannot be used for code generation")
+
+        # TODO: Do proper column name validation
+        if not k.replace(".", "_").isidentifier():
+            raise ValueError(f"Key '{k}' cannot be used for code generation")
+
+        if not col.isidentifier():
+            raise ValueError(f"Renamed '{col}' cannot be used for code generation")
+
+        # TODO: Is there a better way to check for multiple keys?
+        if f in cls.__renamed_fields__:
+            # Make sure renamed fields are checked for
+            template.append(f"if '{col}' in state or '{k}' in state or '{f}' in state:")
+            template.append(
+                f"    v = state['{col}' if '{col}' in state else ("
+                f"'{k}' if '{k}' in state else '{f}')]"
+            )
+        elif col in cls.__fields__ and not isinstance(m, Relation):
+            # Expression to retrieve the value
+            # Always check the joined type first
+            template.append(f"if '{f}' in state or '{k}' in state:")
+            template.append(f"    v = state['{k}' if '{k}' in state else '{f}']")
+        else:
+            template.append(f"if '{f}' in state:")
+            template.append(f"    v = state['{f}']")
+
+        # If a custom unflatten is not provided use the member type information
+        # to pick the most efficient way to restore the value
+        if unflatten is default_unflatten:
+            if isinstance(m, FK_TYPES):
+                types = resolve_member_types(m)
+                assert types is not None
+                RelModel = types[0]
+                if issubclass(RelModel, SQLModel):
+                    namespace[f"rel_model_{f}"] = RelModel
+                    expr = f"await get_cached_model(rel_model_{f}, v, state)"
+                elif issubclass(RelModel, JSONModel):
+                    namespace[f"rel_model_{f}"] = RelModel
+                    expr = f"await rel_model_{f}.restore(v)"
+                elif is_primitive_member(m):
+                    expr = "v"
+                else:
+                    expr = f"await default_unflatten(v, scope)"
+            elif is_primitive_member(m):
+                expr = "v"
+            else:
+                expr = f"await default_unflatten(v, scope)"
+        else:
+            # Use provided unflatten function
+            namespace[f"unflatten_{f}"] = unflatten
+            if asyncio.iscoroutinefunction(unflatten):
+                expr = f"await unflatten_{f}(v, scope)"
+            else:
+                expr = f"unflatten_{f}(v, scope)"
+
+        if on_error == "raise":
+            template.append(f"  self.{f} = {expr}")
+        else:
+            if on_error == "log":
+                handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
+            else:
+                handler = "pass"
+            template.extend(
+                [
+                    f"    try:",
+                    f"        self.{f} = {expr}",
+                    f"    except Exception as e:",
+                    f"        {handler}",
+                ]
+            )
+
+    # Update restored state
+    template.append("self.__restored__ = True")
+    source = "\n    ".join(template)
+    # log.trace("\n----------------------------------------\n")
+    # log.trace(cls)
+    # log.trace(source)
+    # log.trace("\n----------------------------------------\n")
+    return generate_function(source, namespace, "__restorestate__")
+
+
 class SQLMeta(ModelMeta):
     """Both the pk and _id are aliases to the primary key"""
 
@@ -1323,8 +1563,11 @@ class SQLMeta(ModelMeta):
             # Reassign the _id field to the primary key member.
             cls._id = members["_id"] = pk
 
-            # Remove "_id" from the fields list as it is now an alias
-            cls.__fields__ = [f for f in cls.__fields__ if f != "_id"]
+        # Ensure proper pk name is fields list
+        if pk.name != "_id" and "_id" in cls.__fields__:
+            cls.__fields__.remove("_id")
+        if pk.name not in cls.__fields__:
+            cls.__fields__.insert(0, pk.name)
 
         # Check that the atom member indexes are still valid after
         # reassinging to avoid a bug in the past.
@@ -1334,9 +1577,6 @@ class SQLMeta(ModelMeta):
                 continue  # The _id is an alias
             assert m.index not in member_indices
             member_indices.add(m.index)
-
-        # Set the pk name
-        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
 
         # Set to the sqlalchemy Table
         cls.__table__ = None
@@ -1376,10 +1616,19 @@ class SQLMeta(ModelMeta):
             elif getattr(Meta, "abstract", None) is None:
                 Meta.abstract = False
 
+        # Set the pk name after table is set
+        cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
+        cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
+
         # Create a set of fields to remove from state before saving to the db
         # this removes Relation instances and several needed for json
-        excluded_fields = cls.__excluded_fields__ = {"__model__", "__ref__", "_id"}
-
+        excluded_fields = cls.__excluded_fields__ = {
+            "__model__",
+            "__ref__",
+            "__restored__",
+        }
+        if cls.__pk__ != "_id":
+            excluded_fields.add("_id")
         for name, member in cls.members().items():
             if isinstance(member, Relation):
                 excluded_fields.add(name)
@@ -1406,8 +1655,11 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Primary key field name
     __pk__: ClassVar[str]
 
+    #: Table name and primary key
+    __joined_pk__: ClassVar[str]
+
     #: Models which link back to this
-    __backrefs__: ClassVar[SetType[TupleType[Type["Model"], Member]]]
+    __backrefs__: ClassVar[SetType[TupleType[Type[Model], Member]]]
 
     #: List of fields which have been tagged with a different column name
     #: Mapping is class attr -> database column name.
@@ -1423,9 +1675,6 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: This field will be used to determine which engine to use.
     __database__: ClassVar[str] = "default"
 
-    #: If no other member is tagged with primary_key=True this is used
-    _id = Typed(int).tag(store=True, primary_key=True)
-
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
 
@@ -1434,138 +1683,61 @@ class SQLModel(Model, metaclass=SQLMeta):
 
     @classmethod
     async def restore(
-        cls: Type[T], state: StateType, force: Optional[bool] = None, **kwargs: Any
+        cls: Type[T],
+        state: StateType,
+        force: Optional[bool] = None,
+        prefetched: Optional[DictType[Any, StateType]] = None,
+        **kwargs: Any,
     ) -> T:
         """Restore an object from the database using the primary key. Save
         a ref in the table's object cache.  If force is True, update
         the cache if it exists.
         """
-        try:
+        if cls.__joined_pk__ in state:
             # When sqlalchemy does a join the key will have a prefix
             # of the database name
-            pk = state[f"{cls.__model__}_{cls.__pk__}"]
-        except KeyError:
+            pk = state[cls.__joined_pk__]
+        else:
             pk = state[cls.__pk__]
 
-        # Check the default for force reloading
-        if force is None:
-            force = not cls.objects.table.bind.manager.cache
-
-        # Check if this is in the cache
+        # Note make sure this always occurs to force table creation
         cache = cls.objects.cache
-        obj = cache.get(pk)
+        if pk is not None:
+            # Check if this is in the cache
+            obj = cache.get(pk)
+        else:
+            obj = None
+
         if obj is None:
             # Create and cache it
             obj = cls.__new__(cls)
-            cache[pk] = obj
+
+            # Do not place empty pk in cache
+            if pk is not None:
+                cache[pk] = obj
+            restore = True
+        else:
+            # Check the default for force reloading
+            if force is None:
+                force = not cls.objects.table.bind.manager.cache
+            # Note that if force is false and the object was restored
+            # (ie from another query) the object in the cache is reused
+            # and any (potentially new) data in the state is discarded.
+            restore = force or not obj.__restored__
+
+        if restore:
+            # Merge any prefetched relation members into the restore state
+            # so the base class's restore method can find them.
+            if prefetched is not None:
+                prefetched_state = prefetched.get(pk)
+                if prefetched_state is not None:
+                    state = dict(state)  # Convert row proxy
+                    state.update(prefetched_state)
 
             # This ideally should only be done if created
             await obj.__restorestate__(state)
-        elif force or not obj.__restored__:
-            await obj.__restorestate__(state)
 
         return obj
-
-    async def __restorestate__(
-        self: T, state: StateType, scope: Optional[ScopeType] = None
-    ):
-        # Holds cleaned state extracted for this model which may come from
-        # a DB row using labels or renamed columns
-        cleaned_state: StateType = {}
-
-        # Check if the state is using labels by looking for the pk field
-        pk_label = f"{self.__model__}_{self.__pk__}"
-
-        if pk_label in state:
-            # Convert row to dict because it speeds up lookups
-            state = dict(state)
-            # Convert the joined tables into nested states
-            table = self.objects.table
-            table_name = table.name
-            pk = state[pk_label]
-
-            # Pull known
-            for name, m in self.members().items():
-                metadata = m.metadata or {}
-                field_name = metadata.get("name", name)
-                field_label = f"{table_name}_{field_name}"
-
-                if isinstance(m, FK_TYPES):
-                    RelModelTypes = resolve_member_types(m)
-                    assert RelModelTypes is not None
-                    RelModel = RelModelTypes[0]
-                    if issubclass(RelModel, SQLModel):
-                        # If the related model was joined, the pk field should
-                        # exist so automatically restore that as well
-                        rel_pk_name = f"{RelModel.__model__}_{RelModel.__pk__}"
-                        try:
-                            rel_id = state[field_label]
-                        except KeyError:
-                            rel_id = state.get(rel_pk_name)
-                        if rel_id:
-                            # Lookup in cache first to avoid recursion errors
-                            cache = RelModel.objects.cache
-                            obj = cache.get(rel_id)
-                            if obj is None:
-                                if rel_pk_name in state:
-                                    obj = await RelModel.restore(state)
-                                else:
-                                    # Create an unloaded model
-                                    obj = RelModel.__new__(RelModel)
-                                    cache[rel_id] = obj
-                                    obj._id = rel_id
-                            cleaned_state[name] = obj
-                            continue
-
-                elif isinstance(m, Relation):
-                    # Through must be a callable which returns a tuple of
-                    # the through table model
-                    through_factory = metadata.get("through")
-                    if through_factory:
-                        M2M, this_attr, rel_attr = through_factory()
-                        cleaned_state[name] = [
-                            getattr(r, rel_attr)
-                            for r in await M2M.objects.filter(**{this_attr: pk})
-                        ]
-                    else:
-                        # Skip relations
-                        continue
-
-                # Regular fields
-                try:
-                    cleaned_state[name] = state[field_label]
-                except KeyError:
-                    continue
-
-        else:
-            # If any column names were redefined use those instead
-            for name, m in self.members().items():
-                field_name = (m.metadata or {}).get("name", name)
-
-                try:
-                    v = state[field_name]
-                except KeyError:
-                    continue
-
-                # Attempt to lookup related fields from the cache
-                if v is not None and isinstance(m, FK_TYPES):
-                    RelModelTypes = resolve_member_types(m)
-                    assert RelModelTypes is not None
-                    RelModel = RelModelTypes[0]
-                    if issubclass(RelModel, SQLModel):
-                        cache = RelModel.objects.cache
-                        obj = cache.get(v)
-                        if obj is None:
-                            # Create an unloaded model
-                            obj = RelModel.__new__(RelModel)
-                            cache[v] = obj
-                            obj._id = v
-                        v = obj
-                    elif issubclass(RelModel, JSONModel):
-                        v = await RelModel.restore(v)
-
-                cleaned_state[name] = v
-        await super().__restorestate__(cleaned_state, scope)
 
     async def load(
         self: T,
@@ -1588,7 +1760,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
         """
         skip = self.__restored__ and not reload and not fields
-        if skip or self._id is None:
+        if skip or not self._id:
             return  # Already loaded or won't do anything
         db = self.objects
         t = db.table

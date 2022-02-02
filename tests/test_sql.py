@@ -97,7 +97,7 @@ class JobRole(SQLModel):
 class JobTask(SQLModel):
     id = Int().tag(primary_key=True)
     role = Instance(JobRole)
-    desc = Str()
+    desc = Str().tag(length=20)
 
 
 class ImageInfo(JSONModel):
@@ -112,7 +112,7 @@ class Image(SQLModel):
     data = Instance(bytes).tag(nullable=True)
 
     # Maps to sa.ARRAY, must include the item_type tag
-    size = Instance(tuple).tag(nullable=True, item_type=int)
+    # size = Tuple(int).tag(nullable=True)
 
     #: Maps to sa.JSON
     info = Instance(ImageInfo, ())
@@ -169,6 +169,32 @@ class Email(SQLModel):
     to = Str().tag(length=120)
     from_ = Str().tag(name="from").tag(length=120)
     body = Str().tag(length=1024)
+    attachments = Relation(lambda: Attachment)
+
+
+class Attachment(SQLModel):
+    id = Int().tag(primary_key=True)
+    email = Instance(Email).tag(nullable=False)
+    name = Str().tag(length=100)
+    size = Int()
+    data = Bytes()
+
+
+class Ticket(SQLModel):
+    code = Str().tag(length=64, primary_key=True)
+    desc = Str().tag(length=500)
+
+
+class ImportedTicket(Ticket):
+    meta = Dict()
+
+
+class Document(SQLModel):
+    uuid = Str().tag(length=64, primary_key=True)
+
+
+class Project(SQLModel):
+    doc = Instance(Document)
 
 
 class Ticket(SQLModel):
@@ -206,8 +232,8 @@ def test_sanity_pk_and_fields():
     class A(SQLModel):
         foo = Str()
 
-    assert A.__pk__ == '_id'
-    assert A.__fields__ == ['_id', 'foo']
+    assert A.__pk__ == "_id"
+    assert A.__fields__ == ["_id", "foo"]
 
 
 def test_sanity_pk_override():
@@ -216,8 +242,8 @@ def test_sanity_pk_override():
         foo = Str()
 
     assert A._id is A.id
-    assert A.__pk__ == 'id'
-    assert A.__fields__ == ['id', 'foo']
+    assert A.__pk__ == "id"
+    assert A.__fields__ == ["id", "foo"]
 
 
 def test_sanity_pk_renamed():
@@ -226,8 +252,8 @@ def test_sanity_pk_renamed():
         foo = Str()
 
     assert A._id is A.id
-    assert A.__pk__ == 'table_id'
-    assert A.__fields__ == ['id', 'foo']
+    assert A.__pk__ == "table_id"
+    assert A.__fields__ == ["id", "foo"]
 
 
 def test_sanity_relation_exluded():
@@ -242,7 +268,6 @@ def test_sanity_relation_exluded():
 
 @pytest.mark.asyncio
 async def test_sanity_flatten_unflatten():
-
     async def unflatten_date(v: str, scope=None):
         return datetime.strptime(v, "%Y-%m-%d").date()
 
@@ -251,17 +276,18 @@ async def test_sanity_flatten_unflatten():
 
     class TableOfUnformattedGarbage(SQLModel):
         created = Instance(date).tag(
-            type=sa.String(length=10),
-            flatten=flatten_date,
-            unflatten=unflatten_date)
+            type=sa.String(length=10), flatten=flatten_date, unflatten=unflatten_date
+        )
 
-    r = await TableOfUnformattedGarbage.restore({
-        '__model__': TableOfUnformattedGarbage.__model__,
-        '_id': 1,
-        'created': '2020-10-28',
-    })
+    r = await TableOfUnformattedGarbage.restore(
+        {
+            "__model__": TableOfUnformattedGarbage.__model__,
+            "_id": 1,
+            "created": "2020-10-28",
+        }
+    )
     assert r.created == date(2020, 10, 28)
-    assert r.__getstate__()['created'] == '2020-10-28'
+    assert r.__getstate__()["created"] == "2020-10-28"
 
 
 def test_sanity_renamed_fields():
@@ -287,9 +313,9 @@ def test_table_subclass():
         class Meta:
             db_table = "test_a"
 
-    assert A.__pk__ == 'id'
+    assert A.__pk__ == "id"
     assert A.__model__ == "test_a"
-    assert A.__fields__ == ['id']
+    assert A.__fields__ == ["id"]
 
     class B(A):
         extra_col = Dict()
@@ -297,9 +323,9 @@ def test_table_subclass():
         class Meta:
             db_table = "test_b"
 
-    assert B.__pk__ == 'id'
+    assert B.__pk__ == "id"
     assert B.__model__ == "test_b"
-    assert B.__fields__ == ['id', 'extra_col']
+    assert B.__fields__ == ["id", "extra_col"]
 
 
 async def reset_tables(*models):
@@ -565,10 +591,7 @@ async def test_query_pk(db):
 @pytest.mark.asyncio
 async def test_query_subclassed_pk(db):
     await reset_tables(ImportedTicket)
-    t = await ImportedTicket.objects.create(
-        code="special",
-        meta={"source": "db"}
-    )
+    t = await ImportedTicket.objects.create(code="special", meta={"source": "db"})
     assert await ImportedTicket.objects.get(code="special") is t
 
 
@@ -576,10 +599,16 @@ async def test_query_subclassed_pk(db):
 async def test_query_renamed_pk(db):
     await reset_tables(Email)
     email = await Email.objects.create(
-        to="bob@example.com",
-        from_="alice@example.com",
-        body="Hello ;)")
-    assert await Email.objects.get(id=email._id) is email
+        to="bob@example.com", from_="alice@example.com", body="Hello ;)"
+    )
+    email_id = email._id
+    assert await Email.objects.get(id=email_id) is email
+    del email
+    gc.collect()
+
+    # Make sure renamed field is restored
+    email = await Email.objects.get(id=email_id)
+    assert email.from_ == "alice@example.com"
 
 
 @pytest.mark.asyncio
@@ -604,7 +633,8 @@ async def test_query_select_related(db):
 
     # Without select related it only has the Job with it's pk
     roles = await JobRole.objects.all()
-    assert len(roles) == 2 and roles[0].job.__restored__ is False
+    assert len(roles) == 2
+    assert roles[0].job.__restored__ is False
     del roles
 
     # TODO: Shouldn't have to do this here...
@@ -615,13 +645,99 @@ async def test_query_select_related(db):
     # since the second role does not set a job it is excluded due to the
     # default inner join
     roles = await JobRole.objects.select_related("job").all()
-    assert len(roles) == 1 and roles[0].job.__restored__ is True
+    assert len(roles) == 1
+    assert roles[0].job.__restored__ is True
 
     # Using outer join includes related fields that are null
     roles = await JobRole.objects.select_related("job", outer_join=True).all()
-    assert len(roles) == 2
+    assert len(set(roles)) == 2
     assert roles[0].job.__restored__ is True
     assert roles[1].job is None
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related_invalid(db):
+    await reset_tables(Email, Attachment)
+    with pytest.raises(ValueError):
+        await Email.objects.prefetch_related("comments").all()
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related(db):
+    await reset_tables(Email, Attachment)
+
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+        body="Please checkout this project",
+    )
+    await Attachment.objects.create(email=email, name="a.txt", data=b"a")
+    await Attachment.objects.create(email=email, name="b.txt", data=b"b")
+
+    email = await Email.objects.create(
+        to="bob@example.com", from_="alice@example.com", body="Cat pictures!"
+    )
+    await Attachment.objects.create(email=email, name="new.jpg", data=b"photo")
+
+    # Purge cache
+    del email
+    Email.objects.cache.clear()
+    Attachment.objects.cache.clear()
+    gc.collect()
+
+    # No prefetch
+    emails = await Email.objects.all()
+    assert len(emails) == 2
+    for email in emails:
+        assert len(email.attachments) == 0
+
+    # Purge cache
+    del email, emails
+    Email.objects.cache.clear()
+    Attachment.objects.cache.clear()
+    gc.collect()
+
+    emails = await Email.objects.prefetch_related("attachments").all()
+    assert len(emails) == 2
+
+    email = emails[0]
+    assert len(email.attachments) == 2
+    attachment = email.attachments[0]
+    assert attachment.name == "a.txt"
+    assert attachment.data == b"a"
+    assert attachment.email is email
+    attachment = email.attachments[1]
+    assert attachment.name == "b.txt"
+    assert attachment.data == b"b"
+    assert attachment.email is email
+
+    email = emails[1]
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
+
+    email = await Email.objects.prefetch_related("attachments").get(
+        to="bob@example.com"
+    )
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
+
+    emails = await Email.objects.prefetch_related("attachments").filter(
+        body__contains="pictures"
+    )
+    assert len(emails) == 1
+
+    email = emails[0]
+    assert len(email.attachments) == 1
+    attachment = email.attachments[0]
+    assert attachment.name == "new.jpg"
+    assert attachment.data == b"photo"
+    assert attachment.email is email
 
 
 @pytest.mark.asyncio
@@ -996,9 +1112,9 @@ async def test_query_multiple_joins(db):
     assert jobs == [ceo]
 
     jobs = await Job.objects.order_by("name").filter(
-        roles__tasks__desc__notin=["Hire", "Fire"])
+        roles__tasks__desc__notin=["Hire", "Fire"]
+    )
     assert jobs == [cfo, swe]
-
 
 
 @pytest.mark.asyncio
@@ -1101,7 +1217,7 @@ async def test_fk_custom_type(db):
     await reset_tables(Document, Project)
     doc = await Document.objects.create(uuid="foo")
     project = await Project.objects.create(doc=doc)
-    col = Project.objects.table.columns['doc']
+    col = Project.objects.table.columns["doc"]
     assert isinstance(col.type, sa.String)
 
 
@@ -1170,3 +1286,25 @@ def test_abstract_tables():
     # This is okay too
     CustomUser2.objects
     CustomUser3.objects
+
+
+@pytest.mark.benchmark(group="sql")
+def test_benchmark(db, event_loop, benchmark):
+    event_loop.run_until_complete(reset_tables(Image))
+
+    for i in range(1000):
+        event_loop.run_until_complete(
+            Image.objects.create(
+                name=f"Image {i}",
+                path=f"/media/some/path/{i}",
+                alpha=i % 255,
+                # size=(320, 240),
+                data=b"12345678",
+                metadata={"tag": "sunset"},
+            )
+        )
+
+    def run():
+        event_loop.run_until_complete(Image.objects.all())
+
+    benchmark(run)

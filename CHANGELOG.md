@@ -1,6 +1,11 @@
+# 0.7.0
+
+- Use generated functions to speed up save and restore
+
 # 0.6.4
 
 - Fix queries joining through multiple tables
+- Add initial implementation of prefetch_related
 
 # 0.6.3
 

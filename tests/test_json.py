@@ -30,6 +30,10 @@ class File(JSONModel):
 
 class Page(JSONModel):
     files = List(File)
+    created = Instance(datetime).tag(
+        flatten=lambda d, scope: d.timestamp(),
+        unflatten=lambda v, scope: datetime.fromtimestamp(v) if v else None,
+    )
 
 
 class Tree(JSONModel):
@@ -84,10 +88,13 @@ async def test_json_bytes():
 async def test_json_list():
     f1 = File(name="test.png", data=b"abc")
     f2 = File(name="blueberry.jpg", data=b"123")
-    obj = Page(files=[f1, f2])
+    now = datetime.now()
+    obj = Page(files=[f1, f2], created=now)
     state = obj.__getstate__()
+    assert isinstance(state["created"], float)  # Make sure conversion occurred
     data = json.dumps(state)
     r = await Page.restore(json.loads(data))
+    assert r.created == now
     assert len(r.files) == 2
     assert r.files[0].name == f1.name and r.files[0].data == f1.data
     assert r.files[1].name == f2.name and r.files[1].data == f2.data
