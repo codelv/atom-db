@@ -1,6 +1,7 @@
 # 0.7.1
 
 - Always force restore items from direct query even if in the cache
+- Make prefetch use parent queries connection
 
 # 0.7.0
 

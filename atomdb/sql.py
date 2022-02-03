@@ -1285,7 +1285,10 @@ class SQLQuerySet(Atom, Generic[T]):
             RelModel, ref_member = resolve_relation(model, field)
             name = (ref_member.metadata or {}).get("name", ref_member.name)
             rel_col = RelModel.objects.table.c[name]
-            results = await RelModel.objects.filter(rel_col.in_(sub_query))
+            results = await RelModel.objects.filter(
+                rel_col.in_(sub_query),
+                connection=self.connection
+            )
 
             # Group the results by the this models pk
             # Eg if Email.attachments is a relation to Attachments
