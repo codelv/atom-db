@@ -293,7 +293,7 @@ Use select related to load the product's category foreign key automatically.
 
 ```python
 # In this case the category of each product will automatically be loaded
-products = await Product.objects.select_related('category').filter(title_icontains="driver")
+products = await Product.objects.select_related('category').filter(title__icontains="driver")
 # The __restored__ flag can be used check if the model has been loaded
 assert products[0].category.title == "PCB"
 ```
@@ -309,7 +309,7 @@ category = await Category.objects.prefetch_related('products').all()
 assert category.products[0].title == "Stepper driver"
 ```
 
->> Note: prefetch_related does not apply a limit. If the query has a lot of rows
+> Note: prefetch_related does not apply a limit. If the query has a lot of rows
 this may be a problem.
 
 Alternatively you can prefetch the related objects and they will be
@@ -317,7 +317,7 @@ automatically pulled from the internal cache (eg `TheModel.objects.cache`).
 
 ```python
 all_categories = await Category.objects.all()
-products = await Product.objects.filter(title_icontains="driver")
+products = await Product.objects.filter(title__icontains="driver")
 assert products[0].cateogry in all_categories
 ```
 
