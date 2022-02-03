@@ -284,7 +284,7 @@ class Product(SQLModel):
     title = Str()
     category = Typed(Category)
 
-category = await Category.objects.create(title="PCB")
+category = await Category.objects.create(name="PCB")
 await Product.objects.create(title="Stepper driver", category=category)
 
 ```
@@ -295,7 +295,7 @@ Use select related to load the product's category foreign key automatically.
 # In this case the category of each product will automatically be loaded
 products = await Product.objects.select_related('category').filter(title__icontains="driver")
 # The __restored__ flag can be used check if the model has been loaded
-assert products[0].category.title == "PCB"
+assert products[0].category.name == "PCB"
 ```
 
 > If a foreign key relation is NOT in the cache or in the state from a joined row
@@ -305,7 +305,7 @@ case the `__restored__` flag will be set to `False`.
 From the other direction use prefetch related.
 
 ```python
-category = await Category.objects.prefetch_related('products').all()
+category = await Category.objects.prefetch_related('products').get(name="PCB")
 assert category.products[0].title == "Stepper driver"
 ```
 
@@ -318,7 +318,7 @@ automatically pulled from the internal cache (eg `TheModel.objects.cache`).
 ```python
 all_categories = await Category.objects.all()
 products = await Product.objects.filter(title__icontains="driver")
-assert products[0].cateogry in all_categories
+assert products[0].category in all_categories
 ```
 
 
