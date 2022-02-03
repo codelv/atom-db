@@ -5,6 +5,8 @@
 # 0.7.0
 
 - Use generated functions to speed up save and restore
+- BREAKING: To save memory (by avoiding overriding members) the `_id` and `__ref__` fields
+   were changed to an `Int`.
 
 # 0.6.4
 
