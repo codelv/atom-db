@@ -427,7 +427,7 @@ class ModelManager(Atom):
         raise NotImplementedError
 
 
-def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetStateFn:
+def generate_getstate(cls: Type["Model"]) -> GetStateFn:
     """Generate an optimized __getstate__ function for the given model.
 
     Parameters
@@ -470,14 +470,12 @@ def generate_getstate(cls: Type["Model"], include_defaults: bool = True) -> GetS
             expr = f"flatten_{f}(self.{f}, scope)"
         template.append(f'    "{f}": {expr},')
 
-    if include_defaults:
-        template.append('    "__model__": self.__model__,')
-        template.append('    "__ref__": self.__ref__,')
-        template.append("}")
+    template.append('    "__model__": self.__model__,')
+    template.append('    "__ref__": self.__ref__,')
+    template.append("}")
+    if '_id' in members:
         template.append("if self._id:")
         template.append('    state["_id"] = self._id')
-    else:
-        template.append("}")
     template.append("return state")
     source = "\n    ".join(template)
     return generate_function(source, namespace, "__getstate__")
@@ -690,9 +688,6 @@ class Model(Atom, metaclass=ModelMeta):
     # Internal model members
     # --------------------------------------------------------------------------
 
-    #: ID of this object in the database. Subclasses can redefine this as needed
-    _id = Int().tag(primary_key=True)
-
     #: A unique ID used to handle cyclical serialization and deserialization
     __ref__ = Int(factory=lambda: getrandbits(32))
 
@@ -833,11 +828,7 @@ class JSONSerializer(ModelSerializer):
             return {"__ref__": ref, "__model__": obj.__model__}
         else:
             scope[ref] = obj
-        state = obj.__getstate__(scope)
-        _id = state.get("_id")
-        if _id:
-            return {"_id": _id, "__ref__": ref, "__model__": state["__model__"]}
-        return state
+        return obj.__getstate__(scope)
 
     async def get_object_state(self, obj: Any, state: StateType, scope: ScopeType):
         """State should be contained in the dict"""

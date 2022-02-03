@@ -1,6 +1,7 @@
 # 0.7.2
 
 - Support prefetching of one to one "Related" members.
+- Remove _id field in base Model and JSONModel as it has no meaning there
 
 # 0.7.1
 

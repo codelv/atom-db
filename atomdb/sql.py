@@ -1752,6 +1752,9 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Use SQL object manager
     objects = SQLModelManager.instance()
 
+    #: ID of this object in the database. Subclasses can redefine this as needed
+    _id = Typed(int).tag(primary_key=True)
+
     @classmethod
     async def restore(
         cls: Type[T],
