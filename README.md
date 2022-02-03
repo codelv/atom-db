@@ -47,7 +47,7 @@ the database. This can be customized if needed using
 
 You can use atom-db to save and restore atom subclasses to MySQL and Postgres.
 
-Just define models using atom members, but subclass the SQLModel and atom-db
+Just define models using atom members, but subclass the `SQLModel` and atom-db
 will convert the builtin atom members of your model to sqlalchemy table columns
 and create a `sqlalchemy.Table` for your model.
 
@@ -260,6 +260,66 @@ actually work as intended.
 
 > Note: As of `0.4.0` you can pass sqlalchemy filters as non-keyword arguments
 directly to the filter method.
+
+
+###### Caching, select related, and prefetch related
+
+Foreign key relations can automatically be loaded using `select_related` and
+`prefetch_related`. Select related will perform a
+join while prefetch related does a separate query.
+
+Each Model has a cache available at `Model.objects.cache` which uses weakrefs to
+ensure the same object is returned each time. You can manually prefetch objects
+and atom-db will pull them from it's internal cache when restoring objects.
+
+For example with a simple many to one relationship like this:
+
+```python
+
+class Category(SQLModel):
+    name = Str()
+    products = Relation(lambda: Product)
+
+class Product(SQLModel):
+    title = Str()
+    category = Typed(Category)
+
+category = await Category.objects.create(title="PCB")
+await Product.objects.create(title="Stepper driver", category=category)
+
+```
+
+Use select related to load the product's category foreign key automatically.
+
+```python
+# In this case the category of each product will automatically be loaded
+products = await Product.objects.select_related('category').filter(title_icontains="driver")
+# The __restored__ flag can be used check if the model has been loaded
+assert products[0].category.title == "PCB"
+```
+
+> If a foreign key relation is NOT in the cache or in the state from a joined row
+it will create an "unloaded" model with only the primary key populated. In this
+case the `__restored__` flag will be set to `False`.
+
+From the other direction use prefetch related.
+
+```python
+category = await Category.objects.prefetch_related('products').all()
+assert category.products[0].title == "Stepper driver"
+```
+
+>> Note: prefetch_related does not apply a limit. If the query has a lot of rows
+this may be a problem.
+
+Alternatively you can prefetch the related objects and they will be
+automatically pulled from the internal cache (eg `TheModel.objects.cache`).
+
+```python
+all_categories = await Category.objects.all()
+products = await Product.objects.filter(title_icontains="driver")
+assert products[0].cateogry in all_categories
+```
 
 
 #### Advanced / raw sqlalchemy queries
