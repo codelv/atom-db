@@ -318,6 +318,7 @@ def resolve_member_column(
     return col
 
 
+@functools.lru_cache(256)
 def resolve_relation(
     model: Type["SQLModel"], field: str
 ) -> TupleType[Member, Type[Model], Member, sa.Column]:
