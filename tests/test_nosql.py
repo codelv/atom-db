@@ -47,7 +47,7 @@ class Comment(NoSQLModel):
     reply_to = ForwardInstance(lambda: Comment)
 
 
-@pytest.yield_fixture()
+@pytest.fixture
 def db(event_loop):
     MONGO_URL = os.environ.get("MONGO_URL", None)
     if MONGO_URL:
@@ -61,7 +61,6 @@ def db(event_loop):
     yield db
 
 
-@pytest.mark.asyncio
 async def test_db_manager(db):
     mgr = NoSQLModelManager.instance()
 
@@ -81,7 +80,6 @@ async def test_db_manager(db):
     await User.objects.find().to_list(length=10)
 
 
-@pytest.mark.asyncio
 async def test_simple_save_restore_delete(db):
     await User.objects.drop()
 
@@ -124,7 +122,6 @@ async def test_simple_save_restore_delete(db):
     assert state
 
 
-@pytest.mark.asyncio
 async def test_nested_save_restore(db):
     await Image.objects.drop()
     await User.objects.drop()
@@ -194,7 +191,6 @@ async def test_nested_save_restore(db):
                 assert reply.page._id == p._id
 
 
-@pytest.mark.asyncio
 async def test_circular(db):
     # Test that a circular reference is properly stored as a reference
     # and doesn't create an infinite loop
@@ -216,7 +212,6 @@ async def test_circular(db):
     assert r.related[0].related[0] == r
 
 
-@pytest.mark.asyncio
 async def test_load(db):
     # That an object can be loaded by setting the ID and calling load.
     await User.objects.drop()

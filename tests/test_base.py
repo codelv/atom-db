@@ -50,7 +50,6 @@ class NotYetDefined:
     pass
 
 
-@pytest.mark.asyncio
 async def test_manager():
     mgr = ModelManager.instance()
 
@@ -63,7 +62,6 @@ async def test_manager():
         AbstractModel.objects
 
 
-@pytest.mark.asyncio
 async def test_serializer():
     m = AbstractModel()
     ser = ModelSerializer.instance()
@@ -74,7 +72,6 @@ async def test_serializer():
         await ser.flatten_object(m, {})
 
 
-@pytest.mark.asyncio
 async def test_model():
     m = AbstractModel()
 
@@ -159,7 +156,6 @@ def test_gen_fn():
         generate_function('__import__("os").path.exists()', {}, "__import__")
 
 
-@pytest.mark.asyncio
 async def test_on_error_raise():
     """When __on_error__ is raise any old data in the state will make the
     restore fail.
@@ -173,7 +169,6 @@ async def test_on_error_raise():
         a = await A.restore({"value": "str"})
 
 
-@pytest.mark.asyncio
 async def test_on_error_ignore():
     """When __on_error__ is "ignore" and setattr fails the error is discarded"""
 
@@ -187,7 +182,6 @@ async def test_on_error_ignore():
     assert b.new_field == 1
 
 
-@pytest.mark.asyncio
 async def test_on_error_log(caplog):
     """When __on_error__ is "log" (the default) and setattr fails the error
     is logged.

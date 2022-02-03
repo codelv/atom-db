@@ -261,7 +261,6 @@ def test_sanity_relation_exluded():
     assert "children" in Parent.__excluded_fields__
 
 
-@pytest.mark.asyncio
 async def test_sanity_flatten_unflatten():
     async def unflatten_date(v: str, scope=None):
         return datetime.strptime(v, "%Y-%m-%d").date()
@@ -399,12 +398,10 @@ def test_query_ops_valid():
         assert hasattr(ColumnElement, v)
 
 
-@pytest.mark.asyncio
 async def test_drop_create_table(db):
     await reset_tables(User)
 
 
-@pytest.mark.asyncio
 async def test_simple_save_restore_delete(db):
     await reset_tables(User)
 
@@ -442,7 +439,6 @@ async def test_simple_save_restore_delete(db):
     assert await User.objects.get(name=another_user.name) is not None
 
 
-@pytest.mark.asyncio
 async def test_query(db):
     await reset_tables(User)
 
@@ -471,7 +467,6 @@ async def test_query(db):
     assert len(await User.objects.all()) == 0
 
 
-@pytest.mark.asyncio
 async def test_query_related(db):
     await reset_tables(User, Job, JobRole)
 
@@ -505,7 +500,6 @@ async def test_query_related(db):
         roles = await JobRole.objects.get(job__name__other=1)
 
 
-@pytest.mark.asyncio
 async def test_query_related_reverse(db):
     await reset_tables(User, Job, JobRole)
 
@@ -526,7 +520,6 @@ async def test_query_related_reverse(db):
     assert await Job.objects.filter(roles__in=[role, role2]).count() == 2
 
 
-@pytest.mark.asyncio
 async def test_query_order_by(db):
     await reset_tables(User)
     # Create second user
@@ -543,7 +536,6 @@ async def test_query_order_by(db):
     assert await User.objects.order_by("-name").all() == users
 
 
-@pytest.mark.asyncio
 async def test_query_limit(db):
     await reset_tables(User)
     # Create second user
@@ -576,21 +568,18 @@ async def test_query_limit(db):
         User.objects.filter()[0:-1]
 
 
-@pytest.mark.asyncio
 async def test_query_pk(db):
     await reset_tables(Ticket)
     t = await Ticket.objects.create(code="special")
     assert await Ticket.objects.get(code="special") is t
 
 
-@pytest.mark.asyncio
 async def test_query_subclassed_pk(db):
     await reset_tables(ImportedTicket)
     t = await ImportedTicket.objects.create(code="special", meta={"source": "db"})
     assert await ImportedTicket.objects.get(code="special") is t
 
 
-@pytest.mark.asyncio
 async def test_query_renamed_pk(db):
     await reset_tables(Email)
     email = await Email.objects.create(
@@ -606,7 +595,6 @@ async def test_query_renamed_pk(db):
     assert email.from_ == "alice@example.com"
 
 
-@pytest.mark.asyncio
 async def test_requery_update_is_restored(db):
     await reset_tables(Ticket)
     a = await Ticket.objects.create(code="a", desc="In progress")
@@ -623,7 +611,6 @@ async def test_requery_update_is_restored(db):
     assert a.desc == "Fixed" and b.desc == "Fixed"
 
 
-@pytest.mark.asyncio
 async def test_query_bad_column_name(db):
     await reset_tables(Ticket)
     t = await Ticket.objects.create(code="special")
@@ -631,7 +618,6 @@ async def test_query_bad_column_name(db):
         await Ticket.objects.get(unknown="special")
 
 
-@pytest.mark.asyncio
 async def test_query_select_related(db):
     await reset_tables(Job, JobRole)
     # Create second user
@@ -667,14 +653,12 @@ async def test_query_select_related(db):
     assert roles[1].job is None
 
 
-@pytest.mark.asyncio
 async def test_query_prefetch_related_invalid(db):
     await reset_tables(Email, Attachment)
     with pytest.raises(ValueError):
         await Email.objects.prefetch_related("comments").all()
 
 
-@pytest.mark.asyncio
 async def test_query_prefetch_related_instance(db):
     await reset_tables(Document, Project)
     doc1 = await Document.objects.create(name="first", uuid="1")
@@ -699,7 +683,6 @@ async def test_query_prefetch_related_instance(db):
     assert docs[1].project.title == "ship"
 
 
-@pytest.mark.asyncio
 async def test_query_prefetch_related_list(db):
     await reset_tables(Email, Attachment)
 
@@ -777,7 +760,6 @@ async def test_query_prefetch_related_list(db):
     assert attachment.email is email
 
 
-@pytest.mark.asyncio
 async def test_query_prefetch_related_updates(db):
     await reset_tables(Email, Attachment)
 
@@ -801,7 +783,6 @@ async def test_query_prefetch_related_updates(db):
     assert len(email.attachments) == 3
 
 
-@pytest.mark.asyncio
 async def test_query_values(db):
     await reset_tables(User)
     # Create second user
@@ -833,7 +814,6 @@ async def test_query_values(db):
 
 
 @pytest.mark.skipif(IS_MYSQL, reason="Distinct and count doesn't work")
-@pytest.mark.asyncio
 async def test_query_distinct(db):
     await reset_tables(User)
     # Create second user
@@ -860,7 +840,6 @@ async def test_query_distinct(db):
     assert num_ages == 2
 
 
-@pytest.mark.asyncio
 async def test_get_or_create(db):
     await reset_tables(User, Job, JobRole)
 
@@ -886,7 +865,6 @@ async def test_get_or_create(db):
     assert role_check._id == role._id and not created
 
 
-@pytest.mark.asyncio
 async def test_create(db):
     await reset_tables(Job, JobRole)
 
@@ -898,7 +876,6 @@ async def test_create(db):
         same_job = await Job.objects.create(name=job.name)
 
 
-@pytest.mark.asyncio
 async def test_transaction_rollback(db):
     await reset_tables(Job, JobRole)
 
@@ -929,7 +906,6 @@ async def test_transaction_rollback(db):
     assert len(await JobRole.objects.all()) == 0
 
 
-@pytest.mark.asyncio
 async def test_transaction_commit(db):
     await reset_tables(Job, JobRole)
 
@@ -954,7 +930,6 @@ async def test_transaction_commit(db):
     assert len(await JobRole.objects.all()) == 3
 
 
-@pytest.mark.asyncio
 async def test_transaction_delete(db):
     await reset_tables(User)
 
@@ -977,7 +952,6 @@ async def test_transaction_delete(db):
     assert not await User.objects.exists(name=name)
 
 
-@pytest.mark.asyncio
 async def test_filters(db):
     await reset_tables(User)
 
@@ -1029,7 +1003,6 @@ async def test_filters(db):
         users = await User.objects.filter(does_not_exist=True)
 
 
-@pytest.mark.asyncio
 async def test_update(db):
     await reset_tables(User)
     # Create second user
@@ -1056,7 +1029,6 @@ async def test_update(db):
     assert await User.objects.filter(active=False).count() == 2
 
 
-@pytest.mark.asyncio
 async def test_update_renamed(db):
     """Make sure update takes account for any renamed columns"""
     await reset_tables(User, Page)
@@ -1071,7 +1043,6 @@ async def test_update_renamed(db):
     assert await Page.objects.filter(ranking=3).count() == 2
 
 
-@pytest.mark.asyncio
 async def test_column_rename(db):
     """Columns can be tagged with custom names. Verify that it works."""
     await reset_tables(Email)
@@ -1095,7 +1066,6 @@ async def test_column_rename(db):
     restored.from_ == e.from_
 
 
-@pytest.mark.asyncio
 async def test_query_many_to_one(db):
     await reset_tables(Job, JobRole)
 
@@ -1152,7 +1122,6 @@ async def test_query_many_to_one(db):
         assert role.job.__restored__ is True
 
 
-@pytest.mark.asyncio
 async def test_query_multiple_joins(db):
     await reset_tables(Job, JobRole, JobTask)
 
@@ -1178,7 +1147,6 @@ async def test_query_multiple_joins(db):
     assert jobs == [cfo, swe]
 
 
-@pytest.mark.asyncio
 async def test_save_update_fields(db):
     """Test that using save with update_fields only updates the fields
     specified
@@ -1204,7 +1172,6 @@ async def test_save_update_fields(db):
     assert page.visits == 1
 
 
-@pytest.mark.asyncio
 async def test_load_fields(db):
     """Test that using load with fields only loads the given field"""
     await reset_tables(User)
@@ -1238,7 +1205,6 @@ async def test_load_fields(db):
     assert page.title == "New title"
 
 
-@pytest.mark.asyncio
 async def test_save_errors(db):
     await reset_tables(User)
 
@@ -1252,7 +1218,6 @@ async def test_save_errors(db):
     assert r.rowcount == 0
 
 
-@pytest.mark.asyncio
 async def test_object_caching(db):
     await reset_tables(Email)
 
@@ -1273,7 +1238,6 @@ async def test_object_caching(db):
     assert aref is None, "Cached object was not released"
 
 
-@pytest.mark.asyncio
 async def test_fk_custom_type(db):
     await reset_tables(Document, Project)
     doc = await Document.objects.create(uuid="foo")

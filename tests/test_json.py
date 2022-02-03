@@ -45,7 +45,6 @@ class Amount(JSONModel):
     total = Instance(Decimal)
 
 
-@pytest.mark.asyncio
 async def test_json_dates():
     now = datetime.now()
     obj = Dates(d=now.date(), t=now.time(), dt=now)
@@ -56,7 +55,6 @@ async def test_json_dates():
     assert r.d == obj.d and r.t == obj.t and r.dt == r.dt
 
 
-@pytest.mark.asyncio
 async def test_json_decimal():
     d = Decimal("3.9")
     obj = Amount(total=d)
@@ -66,7 +64,6 @@ async def test_json_decimal():
     assert r.total == d
 
 
-@pytest.mark.asyncio
 async def test_json_nested():
     obj = User(options=Options(a=True, b="Yes"))
     state = obj.__getstate__()
@@ -75,7 +72,6 @@ async def test_json_nested():
     assert r.options.a == obj.options.a and r.options.b == obj.options.b
 
 
-@pytest.mark.asyncio
 async def test_json_bytes():
     obj = File(name="test.png", data=b"abc")
     state = obj.__getstate__()
@@ -84,7 +80,6 @@ async def test_json_bytes():
     assert r.name == obj.name and r.data == obj.data
 
 
-@pytest.mark.asyncio
 async def test_json_list():
     f1 = File(name="test.png", data=b"abc")
     f2 = File(name="blueberry.jpg", data=b"123")
@@ -101,7 +96,6 @@ async def test_json_list():
     assert r.files[1].id == f2.id
 
 
-@pytest.mark.asyncio
 async def test_json_cyclical():
     b = Tree(name="b")
     a = Tree(name="a", related=b)
