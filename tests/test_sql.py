@@ -21,7 +21,13 @@ try:
     import atomdb.sql
     import sqlalchemy as sa
     from atom.api import *
-    from atomdb.sql import JSONModel, SQLModel, SQLModelManager, Relation
+    from atomdb.sql import (
+        JSONModel,
+        SQLModel,
+        SQLModelManager,
+        Relation,
+        RelatedInstance,
+    )
 
     if DATABASE_URL.startswith("mysql"):
         from pymysql.err import IntegrityError
@@ -190,10 +196,16 @@ class ImportedTicket(Ticket):
 
 
 class Document(SQLModel):
+    name = Str()
     uuid = Str().tag(length=64, primary_key=True)
+
+    #: Reference to the project that is not included in the state
+    #: You can also use ForwardInstance().tag(store=False)
+    project = RelatedInstance(lambda: Project)
 
 
 class Project(SQLModel):
+    title = Str()
     doc = Instance(Document)
 
 
@@ -663,7 +675,32 @@ async def test_query_prefetch_related_invalid(db):
 
 
 @pytest.mark.asyncio
-async def test_query_prefetch_related(db):
+async def test_query_prefetch_related_instance(db):
+    await reset_tables(Document, Project)
+    doc1 = await Document.objects.create(name="first", uuid="1")
+    doc2 = await Document.objects.create(name="second", uuid="2")
+    await Project.objects.create(title="pack", doc=doc1)
+    await Project.objects.create(title="ship", doc=doc2)
+
+    del doc1, doc2
+    Document.objects.cache.clear()
+    Project.objects.cache.clear()
+    gc.collect()
+
+    # Related instances are not populated without prefetch
+    docs = await Document.objects.all()
+    assert len(docs) == 2
+    assert all(doc.project is None for doc in docs)
+
+    docs = await Document.objects.prefetch_related("project").all()
+    assert len(docs) == 2
+    assert all(doc.project.__restored__ for doc in docs)
+    assert docs[0].project.title == "pack"
+    assert docs[1].project.title == "ship"
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related_list(db):
     await reset_tables(Email, Attachment)
 
     email = await Email.objects.create(

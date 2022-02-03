@@ -1,3 +1,7 @@
+# 0.7.2
+
+- Support prefetching of one to one "Related" members.
+
 # 0.7.1
 
 - Always force restore items from direct query even if in the cache

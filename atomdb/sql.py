@@ -12,9 +12,9 @@ import logging
 import datetime
 import weakref
 import asyncio
+import functools
 import sqlalchemy as sa
 from decimal import Decimal
-from functools import wraps
 from typing import Dict as DictType
 from typing import List as ListType
 from typing import Tuple as TupleType
@@ -45,6 +45,7 @@ from atom.api import (
     Property,
     Str,
     ForwardInstance,
+    ForwardTyped,
     ForwardSubclass,
     Value,
     Bool,
@@ -66,6 +67,7 @@ from .base import (
     RestoreStateFn,
     find_subclasses,
     is_primitive_member,
+    is_db_field,
     resolve_member_types,
     generate_function,
 )
@@ -88,7 +90,7 @@ COLUMN_KWARGS = (
     "system",
     "comment",
 )
-FK_TYPES = (api.Instance, api.Typed, api.ForwardInstance, api.ForwardTyped)
+FK_TYPES = (Instance, Typed, ForwardInstance, ForwardTyped)
 
 # ops that can be used with django-style queries
 QUERY_OPS = {
@@ -186,6 +188,18 @@ class Relation(ContainerList):
             assert types is not None
             to = self._to = types[0]
         return to
+
+
+class RelatedInstance(ForwardInstance):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # type: ignore
+        self.tag(store=False)
+
+
+class RelatedTyped(ForwardTyped):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # type: ignore
+        self.tag(store=False)
 
 
 def py_type_to_sql_column(
@@ -304,9 +318,10 @@ def resolve_member_column(
     return col
 
 
+@functools.cache
 def resolve_relation(
     model: Type["SQLModel"], field: str
-) -> TupleType[Type[Model], Member]:
+) -> TupleType[Member, Type[Model], Member, sa.Column]:
     """Lookup a Relation.
 
     Parameters
@@ -314,23 +329,39 @@ def resolve_relation(
     model: SQLModel
         The model to lookup.
     field: str
-        Path to a Relation member
+        Path to a Relation, Typed, or Instance marked with store=False
 
     Returns
     -------
-    result: tuple[SQLModel, Member]
-        The model this field refers to and the member on that model that is
-        a foreign key to model.
+    result: tuple[Member, SQLModel, Member, sa.Column]
+        A tuple of the related field on the given model, the other model
+        it points to, and the field on that model that points back to this
+        model, and the Column.
 
     """
     relation = model.members().get(field)
+    RelModel: Optional[Type[Model]] = None
     if isinstance(relation, Relation):
+        # RelModel has a many to one relation back to model
         RelModel = cast(Relation, relation).to
+    elif isinstance(relation, FK_TYPES) and not is_db_field(relation):
+        # Note: If is_db_field passes the user should use select_related
+        # instead of prefetch related.
+        types = resolve_member_types(relation)
+        if types and len(types) == 1 and issubclass(types[0], Model):
+            # RelModel has a one to one relation back to model
+            RelModel = types[0]
+
+    if RelModel is not None:
+        m = cast(Member, relation)
         # Find the referring member
         # TODO: This does not support multiple backrefs
         for other_model, referring_member in model.__backrefs__:
             if RelModel is other_model:
-                return (other_model, referring_member)
+                meta = referring_member.metadata or {}
+                name = meta.get("name", referring_member.name)
+                rel_col = RelModel.objects.table.c[name]
+                return (m, other_model, referring_member, rel_col)
     raise ValueError("Invalid prefetch relation '%s' from %s" % (field, model))
 
 
@@ -970,7 +1001,12 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the prefetch fields added.
 
         """
+        # Validate relations
+        for r in related:
+            assert resolve_relation(self.proxy.model, r)
+
         prefetch_clauses = self.prefetch_clauses + list(related)
+
         return self.clone(prefetch_clauses=prefetch_clauses)
 
     def order_by(self, *args):
@@ -1282,9 +1318,7 @@ class SQLQuerySet(Atom, Generic[T]):
         # Perform a query for each related field
         for field in self.prefetch_clauses:
             #: TDOO: This only works with a single relation
-            RelModel, ref_member = resolve_relation(model, field)
-            name = (ref_member.metadata or {}).get("name", ref_member.name)
-            rel_col = RelModel.objects.table.c[name]
+            m, RelModel, ref_member, rel_col = resolve_relation(model, field)
             results = await RelModel.objects.filter(
                 rel_col.in_(sub_query), connection=self.connection
             )
@@ -1292,15 +1326,24 @@ class SQLQuerySet(Atom, Generic[T]):
             # Group the results by the this models pk
             # Eg if Email.attachments is a relation to Attachments
             # This will group by the Email value
-            for r in results:
-                pk = ref_member.get_slot(r)._id
-                prefetched_state = cache.get(pk)
-                if prefetched_state is None:
-                    prefetched_state = cache[pk] = {field: []}
-                relation_values = prefetched_state.get(field)
-                if relation_values is None:
-                    relation_values = prefetched_state[field] = []
-                relation_values.append(r)
+            if isinstance(m, Relation):
+                # Get list of items
+                for r in results:
+                    pk = ref_member.get_slot(r)._id
+                    prefetched_state = cache.get(pk)
+                    if prefetched_state is None:
+                        prefetched_state = cache[pk] = {field: []}
+                    relation_values = prefetched_state.get(field)
+                    if relation_values is None:
+                        relation_values = prefetched_state[field] = []
+                    relation_values.append(r)
+            else:
+                for r in results:
+                    pk = ref_member.get_slot(r)._id
+                    prefetched_state = cache.get(pk)
+                    if prefetched_state is None:
+                        prefetched_state = cache[pk] = {}
+                    prefetched_state[field] = r
         return cache
 
 
@@ -1400,13 +1443,13 @@ async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[
 
     """
     if cls.__joined_pk__ in state and state[cls.__joined_pk__]:
-        return await cls.restore(state)
+        return await cls.restore(state)  # Restore from joined row result
     if not pk:
         return None
     cache = cls.objects.cache
     obj = cache.get(pk)
     if obj is not None:
-        return obj
+        return obj  # item is already in the cache
     # Create an unloaded model
     obj = cls.__new__(cls)
     cache[pk] = obj
@@ -1494,34 +1537,46 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
         # If a custom unflatten is not provided use the member type information
         # to pick the most efficient way to restore the value
         if unflatten is default_unflatten:
+            RelModel = None
             if isinstance(m, FK_TYPES):
                 types = resolve_member_types(m)
-                assert types is not None
-                RelModel = types[0]
-                if issubclass(RelModel, SQLModel):
-                    namespace[f"rel_model_{f}"] = RelModel
-                    expr = f"await get_cached_model(rel_model_{f}, v, state)"
-                elif issubclass(RelModel, JSONModel):
-                    namespace[f"rel_model_{f}"] = RelModel
-                    expr = f"await rel_model_{f}.restore(v)"
-                elif is_primitive_member(m):
-                    expr = "v"
+                if types and len(types) == 1 and issubclass(types[0], Model):
+                    RelModel = types[0]
+
+            if RelModel is not None:
+                # TODO: This is fine for Typed members but not Instance..
+                # as it may need to be a subclass
+                namespace[f"rel_model_{f}"] = RelModel
+
+                if issubclass(RelModel, JSONModel):
+                    obj = f"await rel_model_{f}.restore(v)"
                 else:
-                    expr = f"await default_unflatten(v, scope)"
+                    obj = f"await get_cached_model(rel_model_{f}, v, state)"
+
+                # Only convert if the object has not already been restored
+                expr = "\n            ".join(
+                    [
+                        f"if isinstance(v, rel_model_{f}):",
+                        f"    self.{f} = v",
+                        f"else:",
+                        f"    self.{f} = {obj}",
+                    ]
+                )
+
             elif is_primitive_member(m):
-                expr = "v"
+                expr = f"self.{f} = v"
             else:
-                expr = f"await default_unflatten(v, scope)"
+                expr = f"self.{f} = await default_unflatten(v, scope)"
         else:
             # Use provided unflatten function
             namespace[f"unflatten_{f}"] = unflatten
             if asyncio.iscoroutinefunction(unflatten):
-                expr = f"await unflatten_{f}(v, scope)"
+                expr = f"self.{f} = await unflatten_{f}(v, scope)"
             else:
-                expr = f"unflatten_{f}(v, scope)"
+                expr = f"self.{f} = unflatten_{f}(v, scope)"
 
         if on_error == "raise":
-            template.append(f"  self.{f} = {expr}")
+            template.append(f"    {expr}")
         else:
             if on_error == "log":
                 handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
@@ -1530,7 +1585,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
             template.extend(
                 [
                     f"    try:",
-                    f"        self.{f} = {expr}",
+                    f"        {expr}",
                     f"    except Exception as e:",
                     f"        {handler}",
                 ]
@@ -1539,10 +1594,10 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
     # Update restored state
     template.append("self.__restored__ = True")
     source = "\n    ".join(template)
-    # log.trace("\n----------------------------------------\n")
-    # log.trace(cls)
-    # log.trace(source)
-    # log.trace("\n----------------------------------------\n")
+    # print("\n----------------------------------------\n")
+    # print(cls)
+    # print(source)
+    # print("\n----------------------------------------\n")
     return generate_function(source, namespace, "__restorestate__")
 
 
