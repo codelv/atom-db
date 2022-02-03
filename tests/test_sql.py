@@ -196,7 +196,7 @@ class ImportedTicket(Ticket):
 
 
 class Document(SQLModel):
-    name = Str()
+    name = Str().tag(length=32)
     uuid = Str().tag(length=64, primary_key=True)
 
     #: Reference to the project that is not included in the state
@@ -205,7 +205,7 @@ class Document(SQLModel):
 
 
 class Project(SQLModel):
-    title = Str()
+    title = Str().tag(length=32)
     doc = Instance(Document)
 
 

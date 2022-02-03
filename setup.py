@@ -12,22 +12,24 @@ Created on Feb 21, 2019
 from setuptools import setup, find_packages
 
 setup(
-    name='atom-db',
-    version='0.7.2.dev',
-    author='CodeLV',
-    author_email='frmdstryr@gmail.com',
-    url='https://github.com/codelv/atom-db',
-    description='Database abstraction layer for atom objects',
+    name="atom-db",
+    version="0.7.2.dev",
+    author="CodeLV",
+    author_email="frmdstryr@gmail.com",
+    url="https://github.com/codelv/atom-db",
+    description="Database abstraction layer for atom objects",
     license="MIT",
-    long_description=open('README.md').read(),
+    long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    requires=['atom'],
-    python_requires='>=3.7',
-    install_requires=['atom>=0.7.0', 'bytecode'],
+    requires=["atom"],
+    python_requires=">=3.7",
+    install_requires=["atom>=0.7.0", "bytecode"],
     optional_requires=[
-        'sqlalchemy', 'aiomysql', 'aiopg',  'aiosqlite',  # sql database support
-        'motor', # nosql database support
+        "sqlalchemy",
+        "aiomysql",
+        "aiopg",
+        "aiosqlite",  # sql database support
+        "motor",  # nosql database support
     ],
     packages=find_packages(),
 )
-
