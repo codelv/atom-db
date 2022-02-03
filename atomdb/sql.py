@@ -1226,18 +1226,30 @@ class SQLQuerySet(Atom, Generic[T]):
         return f.result()
 
     async def all(self, *args, **kwargs) -> Sequence[T]:
+        """Get the all results matching the query. This will force restore the
+        items even if it was in the cache.
+
+        Returns
+        -------
+        results: list[Model]
+            The models entry matching the query
+
+        """
         if args or kwargs:
             return await self.filter(*args, **kwargs).all()
         cache = await self.prefetch()
         q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
-        return [cast(T, await restore(row, prefetched=cache)) for row in cursor]
+        return [
+            cast(T, await restore(row, force=True, prefetched=cache)) for row in cursor
+        ]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
         """Get the first result matching the query. Unlike django this will
         NOT raise an error if multiple objects would be returned or an entry
-        does not exist.
+        does not exist. This will force restore the item even if it was in the
+        cache.
 
         Returns
         -------
@@ -1252,7 +1264,9 @@ class SQLQuerySet(Atom, Generic[T]):
         if row is None:
             return None
         cache = await self.prefetch()
-        return cast(T, await self.proxy.model.restore(row, prefetched=cache))
+        return cast(
+            T, await self.proxy.model.restore(row, force=True, prefetched=cache)
+        )
 
     async def prefetch(self) -> Optional[DictType[Any, StateType]]:
         """Perform a prefetch lookup and populate the cache."""
@@ -1692,6 +1706,24 @@ class SQLModel(Model, metaclass=SQLMeta):
         """Restore an object from the database using the primary key. Save
         a ref in the table's object cache.  If force is True, update
         the cache if it exists.
+
+        Parameters
+        ----------
+        state: Mapping[str, Any]
+            A mapping of field name to value. May contain result of a join (eg
+            state of multiple models prefexed with the table name).
+        force: Optional[bool]
+            Whether to force calling restorestate. This is used to to avoid
+            restoring cached objects.
+        prefetched: Optional[dict]
+            A mapping of prefetched related values. If present the objects
+            primary key is looked up and added to the state.
+
+        Returns
+        -------
+        model: SQLModel
+            The restored or cached model.
+
         """
         if cls.__joined_pk__ in state:
             # When sqlalchemy does a join the key will have a prefix

@@ -197,23 +197,6 @@ class Project(SQLModel):
     doc = Instance(Document)
 
 
-class Ticket(SQLModel):
-    code = Str().tag(length=64, primary_key=True)
-    desc = Str().tag(length=500)
-
-
-class ImportedTicket(Ticket):
-    meta = Dict()
-
-
-class Document(SQLModel):
-    uuid = Str().tag(length=64, primary_key=True)
-
-
-class Project(SQLModel):
-    doc = Instance(Document)
-
-
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -612,6 +595,23 @@ async def test_query_renamed_pk(db):
 
 
 @pytest.mark.asyncio
+async def test_requery_update_is_restored(db):
+    await reset_tables(Ticket)
+    a = await Ticket.objects.create(code="a", desc="In progress")
+    b = await Ticket.objects.create(code="b", desc="In progress")
+    c = await Ticket.objects.create(code="c", desc="Fixed")
+    results = await Ticket.objects.order_by('code').all()
+    assert results == [a, b, c]
+
+    await Ticket.objects.filter(desc="In progress").update(desc="Fixed")
+
+    # The objects remain the same but his force restores any updated fields
+    updated_results = await Ticket.objects.order_by('code').all()
+    assert updated_results == [a, b, c]
+    assert a.desc == "Fixed" and b.desc == "Fixed"
+
+
+@pytest.mark.asyncio
 async def test_query_bad_column_name(db):
     await reset_tables(Ticket)
     t = await Ticket.objects.create(code="special")
@@ -738,6 +738,30 @@ async def test_query_prefetch_related(db):
     assert attachment.name == "new.jpg"
     assert attachment.data == b"photo"
     assert attachment.email is email
+
+
+@pytest.mark.asyncio
+async def test_query_prefetch_related_updates(db):
+    await reset_tables(Email, Attachment)
+
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+        body="Please checkout this project",
+    )
+    await Attachment.objects.create(email=email, name="a.txt", data=b"a")
+    await Attachment.objects.create(email=email, name="b.txt", data=b"b")
+
+    email = await Email.objects.prefetch_related("attachments").get(
+        to="alice@example.com"
+    )
+    assert len(email.attachments) == 2
+
+    await Attachment.objects.create(email=email, name="c.txt", data=b"c")
+    email = await Email.objects.prefetch_related("attachments").get(
+        to="alice@example.com"
+    )
+    assert len(email.attachments) == 3
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,7 @@
+# 0.7.1
+
+- Always force restore items from direct query even if in the cache
+
 # 0.7.0
 
 - Use generated functions to speed up save and restore
