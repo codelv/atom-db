@@ -600,13 +600,13 @@ async def test_requery_update_is_restored(db):
     a = await Ticket.objects.create(code="a", desc="In progress")
     b = await Ticket.objects.create(code="b", desc="In progress")
     c = await Ticket.objects.create(code="c", desc="Fixed")
-    results = await Ticket.objects.order_by('code').all()
+    results = await Ticket.objects.order_by("code").all()
     assert results == [a, b, c]
 
     await Ticket.objects.filter(desc="In progress").update(desc="Fixed")
 
     # The objects remain the same but his force restores any updated fields
-    updated_results = await Ticket.objects.order_by('code').all()
+    updated_results = await Ticket.objects.order_by("code").all()
     assert updated_results == [a, b, c]
     assert a.desc == "Fixed" and b.desc == "Fixed"
 

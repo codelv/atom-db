@@ -1286,8 +1286,7 @@ class SQLQuerySet(Atom, Generic[T]):
             name = (ref_member.metadata or {}).get("name", ref_member.name)
             rel_col = RelModel.objects.table.c[name]
             results = await RelModel.objects.filter(
-                rel_col.in_(sub_query),
-                connection=self.connection
+                rel_col.in_(sub_query), connection=self.connection
             )
 
             # Group the results by the this models pk
