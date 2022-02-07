@@ -595,18 +595,38 @@ async def test_query_renamed_pk(db):
     assert email.from_ == "alice@example.com"
 
 
-async def test_requery_update_is_restored(db):
+async def test_requery_update_not_force_restored(db, monkeypatch):
     await reset_tables(Ticket)
+    manager = SQLModelManager.instance()
     a = await Ticket.objects.create(code="a", desc="In progress")
     b = await Ticket.objects.create(code="b", desc="In progress")
     c = await Ticket.objects.create(code="c", desc="Fixed")
     results = await Ticket.objects.order_by("code").all()
     assert results == [a, b, c]
 
+    # This bypasses updating the object in memory
+    await Ticket.objects.filter(desc="In progress").update(desc="Fixed")
+
+    # The objects remain the same, the cached values are still kept
+    updated_results = await Ticket.objects.order_by("code").all()
+    assert updated_results == [a, b, c]
+    assert a.desc == "In progress" and b.desc == "In progress"
+
+
+async def test_requery_update_force_restored(db):
+    await reset_tables(Ticket)
+    manager = SQLModelManager.instance()
+    a = await Ticket.objects.create(code="a", desc="In progress")
+    b = await Ticket.objects.create(code="b", desc="In progress")
+    c = await Ticket.objects.create(code="c", desc="Fixed")
+    results = await Ticket.objects.order_by("code").all()
+    assert results == [a, b, c]
+
+    # This bypasses updating the object in memory
     await Ticket.objects.filter(desc="In progress").update(desc="Fixed")
 
     # The objects remain the same but his force restores any updated fields
-    updated_results = await Ticket.objects.order_by("code").all()
+    updated_results = await Ticket.objects.order_by("code").all(force_restore=True)
     assert updated_results == [a, b, c]
     assert a.desc == "Fixed" and b.desc == "Fixed"
 
@@ -675,6 +695,11 @@ async def test_query_prefetch_related_instance(db):
     docs = await Document.objects.all()
     assert len(docs) == 2
     assert all(doc.project is None for doc in docs)
+
+    del docs
+    Document.objects.cache.clear()
+    Project.objects.cache.clear()
+    gc.collect()
 
     docs = await Document.objects.prefetch_related("project").all()
     assert len(docs) == 2
@@ -772,13 +797,15 @@ async def test_query_prefetch_related_updates(db):
     await Attachment.objects.create(email=email, name="b.txt", data=b"b")
 
     email = await Email.objects.prefetch_related("attachments").get(
-        to="alice@example.com"
+        to="alice@example.com",
+        force_restore=True,
     )
     assert len(email.attachments) == 2
 
     await Attachment.objects.create(email=email, name="c.txt", data=b"c")
     email = await Email.objects.prefetch_related("attachments").get(
-        to="alice@example.com"
+        to="alice@example.com",
+        force_restore=True,
     )
     assert len(email.attachments) == 3
 

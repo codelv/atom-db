@@ -633,7 +633,7 @@ class SQLModelManager(ModelManager):
     #: Table proxy cache
     proxies = Dict()
 
-    #: Cache results
+    #: Cache results.
     cache = Bool(True)
 
     def _default_metadata(self) -> sa.MetaData:
@@ -712,6 +712,9 @@ class SQLTableProxy(Atom, Generic[T]):
 
     #: Key used to pull the connection out of filter kwargs
     connection_kwarg = Str("connection")
+
+    #: Key used to pass the force restore option
+    restore_kwarg = Str("force_restore")
 
     #: Reference to the aiomysql or aiopg Engine
     #: This is used to get a connection from the connection pool.
@@ -906,6 +909,7 @@ class SQLQuerySet(Atom, Generic[T]):
     distinct_clauses = List()
     limit_count = Int()
     query_offset = Int()
+    force_restore = Bool()
 
     def clone(self, **kwargs) -> "SQLQuerySet[T]":
         state = self.__getstate__()
@@ -1100,14 +1104,11 @@ class SQLQuerySet(Atom, Generic[T]):
         filter_clauses = self.filter_clauses + list(args)
         related_clauses = self.related_clauses[:]
 
-        connection_kwarg = p.connection_kwarg
-        connection = self.connection
+        connection_kwarg, restore_kwarg = p.connection_kwarg, p.restore_kwarg
 
         # Build the filter operations
         for k, v in kwargs.items():
-            # Ignore connection parameter
-            if k == connection_kwarg:
-                connection = v
+            if k == connection_kwarg or k == restore_kwarg:
                 continue
             model = p.model
             op = "eq"
@@ -1129,7 +1130,8 @@ class SQLQuerySet(Atom, Generic[T]):
             filter_clauses.append(clause)
 
         return self.clone(
-            connection=connection,
+            connection=kwargs.get(connection_kwarg, self.connection),
+            force_restore=kwargs.get(restore_kwarg, self.force_restore),
             filter_clauses=filter_clauses,
             related_clauses=related_clauses,
         )
@@ -1279,8 +1281,9 @@ class SQLQuerySet(Atom, Generic[T]):
         q = self.query("select")
         restore = self.proxy.model.restore
         cursor = await self.proxy.fetchall(q, connection=self.connection)
+        force = self.force_restore
         return [
-            cast(T, await restore(row, force=True, prefetched=cache)) for row in cursor
+            cast(T, await restore(row, force=force, prefetched=cache)) for row in cursor
         ]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
@@ -1302,9 +1305,9 @@ class SQLQuerySet(Atom, Generic[T]):
         if row is None:
             return None
         cache = await self.prefetch()
-        return cast(
-            T, await self.proxy.model.restore(row, force=True, prefetched=cache)
-        )
+        model = self.proxy.model
+        force = self.force_restore
+        return cast(T, await model.restore(row, force=force, prefetched=cache))
 
     async def prefetch(self) -> Optional[DictType[Any, StateType]]:
         """Perform a prefetch lookup and populate the cache."""
@@ -1814,6 +1817,7 @@ class SQLModel(Model, metaclass=SQLMeta):
             # Check the default for force reloading
             if force is None:
                 force = not cls.objects.table.bind.manager.cache
+
             # Note that if force is false and the object was restored
             # (ie from another query) the object in the cache is reused
             # and any (potentially new) data in the state is discarded.
