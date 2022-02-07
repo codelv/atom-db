@@ -473,7 +473,7 @@ def generate_getstate(cls: Type["Model"]) -> GetStateFn:
     template.append('    "__model__": self.__model__,')
     template.append('    "__ref__": self.__ref__,')
     template.append("}")
-    if '_id' in members:
+    if "_id" in members:
         template.append("if self._id:")
         template.append('    state["_id"] = self._id')
     template.append("return state")

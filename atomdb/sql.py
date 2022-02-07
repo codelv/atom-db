@@ -595,7 +595,9 @@ class SQLModelSerializer(ModelSerializer):
             The flattened object
 
         """
-        return obj._id
+        if isinstance(obj, SQLModel):
+            return obj._id
+        return type(obj).serializer.flatten_object(obj, scope)
 
     async def get_object_state(self, obj, state, scope):
         """Load the object state if needed. Since the __model__ is not saved
