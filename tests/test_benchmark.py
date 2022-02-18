@@ -1,7 +1,8 @@
-import dis
-import pytest
 from datetime import datetime
-from atom.api import Float, Int, Str, List, Bool, Dict, Typed
+
+import pytest
+from atom.api import Bool, Dict, Float, Int, List, Str, Typed
+
 from atomdb.base import Model
 
 NOW = datetime.now()
@@ -16,6 +17,7 @@ state = dict(
     """,
     enabled=True,
     rating=8.3,
+    sku=4567899,
     datetime=NOW.timestamp(),
     tags=["electronics", "laptop"],
     meta={"views": 0},
@@ -27,6 +29,7 @@ class Product(Model):
     desc = Str()
     enabled = Bool()
     rating = Float()
+    sku = Int()
     tags = List(str)
     meta = Dict()
     created = Typed(datetime, factory=datetime.now).tag(
@@ -48,6 +51,7 @@ def test_serialize(benchmark):
         enabled=True,
         rating=8.3,
         created=NOW,
+        sku=4567899,
         tags=["electronics", "laptop"],
         meta={"views": 0},
     )

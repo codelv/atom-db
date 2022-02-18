@@ -8,9 +8,11 @@ The full license is in the file LICENSE.text, distributed with this software.
 Created on Jun 12, 2018
 """
 import weakref
+
 import bson
-from atom.api import Atom, Instance, Value, Dict, Typed
-from .base import ModelManager, ModelSerializer, Model, find_subclasses, JSONSerializer
+from atom.api import Atom, Dict, Instance, Typed, Value
+
+from .base import JSONSerializer, Model, ModelManager, ModelSerializer, find_subclasses
 
 
 class NoSQLModelSerializer(ModelSerializer):

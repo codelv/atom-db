@@ -1,13 +1,14 @@
 import os
-import pytest
-from atom.api import *
-from faker import Faker
 from pprint import pprint
 
+import pytest
+from atom.api import Atom, Bool, Dict, Enum, ForwardInstance, Instance, List, Str
+from faker import Faker
+
 try:
-    import atomdb.nosql
-    from atomdb.nosql import NoSQLModel, NoSQLModelManager
     from motor.motor_asyncio import AsyncIOMotorClient
+
+    from atomdb.nosql import NoSQLModel, NoSQLModelManager
 except ImportError:
     pytest.skip("mongo/motor is not available", allow_module_level=True)
 

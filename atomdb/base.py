@@ -7,44 +7,42 @@ The full license is in the file LICENSE.text, distributed with this software.
 
 Created on Jun 12, 2018
 """
-import os
 import asyncio
 import logging
-import traceback
+from base64 import b64decode, b64encode
+from collections.abc import MutableMapping
+from datetime import date, datetime, time
+from decimal import Decimal
+from pprint import pformat
+from random import getrandbits
+from typing import Any, Callable, ClassVar
 from typing import Dict as DictType
 from typing import List as ListType
+from typing import Optional
 from typing import Tuple as TupleType
-from typing import Any, ClassVar, Generic, Type, TypeVar, Optional, Union, Callable
-from collections.abc import MutableMapping
-from random import getrandbits
-from pprint import pformat
-from base64 import b64encode, b64decode
-from datetime import date, time, datetime
-from decimal import Decimal
+from typing import Type, TypeVar
 from uuid import UUID
-from bytecode import Bytecode, Instr, Label
+
 from atom.api import (
     Atom,
     AtomMeta,
+    Bool,
+    Coerced,
+    Dict,
+    Float,
+    Instance,
+    Int,
+    List,
     Member,
     Property,
-    Instance,
-    Dict,
-    Str,
-    Coerced,
-    Value,
-    Typed,
-    List,
-    Bytes,
-    Bool,
-    Int,
-    Float,
-    Tuple,
     Set,
-    ForwardInstance,
-    ForwardTyped,
+    Str,
+    Tuple,
+    Typed,
+    Value,
     set_default,
 )
+from bytecode import Bytecode, Instr, Label
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -66,8 +64,8 @@ def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
 
 def is_db_field(m: Member) -> bool:
     """Check if the member should be saved into the database.  Any member that
-    does not start with an underscore and is not tagged with `store=False`
-    is considered to be field to save into the database.
+    does not start with an underscore, is not a Property, and is not tagged
+    with `store=False` is considered to be field to save into the database.
 
     Parameters
     ----------
@@ -84,6 +82,8 @@ def is_db_field(m: Member) -> bool:
     default = not m.name.startswith("_")
     if metadata is not None:
         return metadata.get("store", default)
+    if isinstance(m, Property):
+        return False  # Users can override this by tagging it with store=True
     return default
 
 
@@ -112,7 +112,7 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     if isinstance(m, (Tuple, Set, List, Typed, Instance, Dict, Coerced)):
         try:
             types = resolve_member_types(m, resolve=False)
-        except UnresolvableError as e:
+        except UnresolvableError:
             return None
         if types is None:
             return False  # Value can be any type
@@ -577,9 +577,9 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
                 handler = "pass"
             template.extend(
                 [
-                    f"    try:",
+                    "    try:",
                     f"        self.{f} = {expr}",
-                    f"    except Exception as e:",
+                    "    except Exception as e:",
                     f"        {handler}",
                 ]
             )

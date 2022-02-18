@@ -1,3 +1,15 @@
+# 0.7.4
+
+- Do not save Property members by default
+- Annotate Model `objects` and `serializer` with `ClassVar`
+- Change import sorting and cleanup errors found with flake8
+
+# 0.7.3
+
+- Revert force restore items from direct query even if in the cache.
+Now queries can accept a `force_restore=True` to do this.
+See https://en.wikipedia.org/wiki/Isolation_%28database_systems%29
+
 # 0.7.2
 
 - Support prefetching of one to one "Related" members.

@@ -1,14 +1,26 @@
 import gc
 import os
-import re
-import pytest
 import random
-
+import re
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from datetime import datetime, date, time, timedelta
-from faker import Faker
 
-faker = Faker()
+import pytest
+from atom.api import (
+    Bool,
+    Bytes,
+    Dict,
+    Enum,
+    Float,
+    ForwardInstance,
+    Instance,
+    Int,
+    List,
+    Range,
+    Str,
+    Typed,
+)
+from faker import Faker
 
 if "DATABASE_URL" not in os.environ:
     os.environ[
@@ -18,15 +30,14 @@ if "DATABASE_URL" not in os.environ:
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 try:
-    import atomdb.sql
     import sqlalchemy as sa
-    from atom.api import *
+
     from atomdb.sql import (
         JSONModel,
+        RelatedInstance,
+        Relation,
         SQLModel,
         SQLModelManager,
-        Relation,
-        RelatedInstance,
     )
 
     if DATABASE_URL.startswith("mysql"):
@@ -34,7 +45,9 @@ try:
     else:
         from psycopg2.errors import UniqueViolation as IntegrityError
 except ImportError as e:
-    pytest.skip("aiomysql and aiopg not available", allow_module_level=True)
+    pytest.skip(f"aiomysql and aiopg not available {e}", allow_module_level=True)
+
+faker = Faker()
 
 IS_MYSQL = DATABASE_URL.startswith("mysql")
 
@@ -348,11 +361,11 @@ async def db(event_loop):
         params = dict(host=host, port=int(port), user=user, password=pwd)
 
     if schema == "mysql":
-        from aiomysql.sa import create_engine
         from aiomysql import connect
+        from aiomysql.sa import create_engine
     elif schema == "postgres":
-        from aiopg.sa import create_engine
         from aiopg import connect
+        from aiopg.sa import create_engine
     elif schema == "sqlite":
         from aiosqlite import connect
 
@@ -392,6 +405,7 @@ async def db(event_loop):
 def test_query_ops_valid():
     """Test that operators are all valid"""
     from sqlalchemy.sql.expression import ColumnElement
+
     from atomdb.sql import QUERY_OPS
 
     for k, v in QUERY_OPS.items():
@@ -474,8 +488,8 @@ async def test_query_related(db):
     job1 = await Job.objects.create(name=faker.job())
     job2 = await Job.objects.create(name=faker.job())
 
-    role = await JobRole.objects.create(job=job, name=faker.job())
-    role1 = await JobRole.objects.create(job=job1, name=faker.job())
+    await JobRole.objects.create(job=job, name=faker.job())
+    await JobRole.objects.create(job=job1, name=faker.job())
     role2 = await JobRole.objects.create(job=job2, name=faker.job())
 
     roles = await JobRole.objects.filter(job__name__in=[job.name, job2.name])
@@ -595,9 +609,8 @@ async def test_query_renamed_pk(db):
     assert email.from_ == "alice@example.com"
 
 
-async def test_requery_update_not_force_restored(db, monkeypatch):
+async def test_requery_update_not_force_restored(db):
     await reset_tables(Ticket)
-    manager = SQLModelManager.instance()
     a = await Ticket.objects.create(code="a", desc="In progress")
     b = await Ticket.objects.create(code="b", desc="In progress")
     c = await Ticket.objects.create(code="c", desc="Fixed")
@@ -615,7 +628,6 @@ async def test_requery_update_not_force_restored(db, monkeypatch):
 
 async def test_requery_update_force_restored(db):
     await reset_tables(Ticket)
-    manager = SQLModelManager.instance()
     a = await Ticket.objects.create(code="a", desc="In progress")
     b = await Ticket.objects.create(code="b", desc="In progress")
     c = await Ticket.objects.create(code="c", desc="Fixed")
@@ -633,7 +645,7 @@ async def test_requery_update_force_restored(db):
 
 async def test_query_bad_column_name(db):
     await reset_tables(Ticket)
-    t = await Ticket.objects.create(code="special")
+    await Ticket.objects.create(code="special")
     with pytest.raises(ValueError):
         await Ticket.objects.get(unknown="special")
 
@@ -813,7 +825,6 @@ async def test_query_prefetch_related_updates(db):
 async def test_query_values(db):
     await reset_tables(User)
     # Create second user
-    users = []
     user = User(name="Bob", email=faker.email(), age=40, active=True)
     await user.save()
 
@@ -844,7 +855,6 @@ async def test_query_values(db):
 async def test_query_distinct(db):
     await reset_tables(User)
     # Create second user
-    users = []
     user = User(name="Bob", email=faker.email(), age=40, active=True)
     await user.save()
 
@@ -900,7 +910,7 @@ async def test_create(db):
 
     # DB should enforce unique ness
     with pytest.raises(IntegrityError):
-        same_job = await Job.objects.create(name=job.name)
+        await Job.objects.create(name=job.name)
 
 
 async def test_transaction_rollback(db):
@@ -920,7 +930,7 @@ async def test_transaction_rollback(db):
                     assert role._id is not None
                 complete = True
                 raise ValueError("Oh crap, I didn't want to do that")
-            except Exception as e:
+            except Exception:
                 await trans.rollback()
                 rollback = True
                 raise
@@ -947,7 +957,7 @@ async def test_transaction_commit(db):
                     job=job, name=faker.job(), connection=conn
                 )
                 assert role._id is not None
-        except:
+        except Exception:
             await trans.rollback()
             raise
         else:
@@ -970,7 +980,7 @@ async def test_transaction_delete(db):
             )
             assert user._id is not None
             await User.objects.delete(name=name, connection=conn)
-        except:
+        except Exception:
             await trans.rollback()
             raise
         else:
@@ -1033,7 +1043,6 @@ async def test_filters(db):
 async def test_update(db):
     await reset_tables(User)
     # Create second user
-    users = []
     user = User(name="Bob", email=faker.email(), age=40, active=True)
     await user.save()
 
@@ -1044,15 +1053,15 @@ async def test_update(db):
     await user2.save()
 
     assert await User.objects.filter(age=20).exists()
-    r = await User.objects.filter(age=20).update(age=25)
+    await User.objects.filter(age=20).update(age=25)
     assert not await User.objects.filter(age=20).exists()
 
     assert await User.objects.filter(active=False).exists()
-    r = await User.objects.update(active=True)
+    await User.objects.update(active=True)
     assert not await User.objects.filter(active=False).exists()
 
     assert await User.objects.filter(active=False).count() == 0
-    r = await User.objects.filter(name="Bob").update(active=False)
+    await User.objects.filter(name="Bob").update(active=False)
     assert await User.objects.filter(active=False).count() == 2
 
 
@@ -1160,10 +1169,10 @@ async def test_query_multiple_joins(db):
     cfo_role = await JobRole.objects.create(name="CFO", job=cfo)
     swe_role = await JobRole.objects.create(name="SWE", job=swe)
 
-    code_task = await JobTask.objects.create(desc="Code", role=swe_role)
-    hire_task = await JobTask.objects.create(desc="Hire", role=ceo_role)
-    fire_task = await JobTask.objects.create(desc="Fire", role=ceo_role)
-    account_task = await JobTask.objects.create(desc="Account", role=cfo_role)
+    await JobTask.objects.create(desc="Code", role=swe_role)
+    await JobTask.objects.create(desc="Hire", role=ceo_role)
+    await JobTask.objects.create(desc="Fire", role=ceo_role)
+    await JobTask.objects.create(desc="Account", role=cfo_role)
 
     jobs = await Job.objects.filter(roles__tasks__desc="Fire")
     assert jobs == [ceo]
@@ -1268,7 +1277,7 @@ async def test_object_caching(db):
 async def test_fk_custom_type(db):
     await reset_tables(Document, Project)
     doc = await Document.objects.create(uuid="foo")
-    project = await Project.objects.create(doc=doc)
+    await Project.objects.create(doc=doc)
     col = Project.objects.table.columns["doc"]
     assert isinstance(col.type, sa.String)
 

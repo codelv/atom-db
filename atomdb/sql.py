@@ -7,69 +7,60 @@ The full license is in the file LICENSE.txt, distributed with this software.
 
 Created on Aug 2, 2018
 """
-import os
-import logging
-import datetime
-import weakref
 import asyncio
+import datetime
 import functools
-import sqlalchemy as sa
+import logging
+import weakref
 from decimal import Decimal
-from typing import Dict as DictType
-from typing import List as ListType
-from typing import Tuple as TupleType
-from typing import Set as SetType
+from typing import Any
 from typing import Callable as CallableType
-from typing import (
-    Any,
-    ClassVar,
-    Type,
-    Optional,
-    Iterator,
-    Union,
-    Sequence,
-    Generic,
-    TypeVar,
-    cast,
-)
+from typing import ClassVar
+from typing import Dict as DictType
+from typing import Generic, Iterator
+from typing import List as ListType
+from typing import Optional, Sequence
+from typing import Set as SetType
+from typing import Tuple as TupleType
+from typing import Type, TypeVar, Union, cast
+
+import sqlalchemy as sa
 from atom import api
 from atom.api import (
     Atom,
-    Member,
-    Subclass,
-    ContainerList,
-    Int,
-    Dict,
-    Instance,
-    Typed,
-    Property,
-    Str,
-    ForwardInstance,
-    ForwardTyped,
-    ForwardSubclass,
-    Value,
     Bool,
+    ContainerList,
+    Dict,
+    ForwardInstance,
+    ForwardSubclass,
+    ForwardTyped,
+    Instance,
+    Int,
     List,
+    Member,
+    Str,
+    Typed,
+    Value,
 )
-from sqlalchemy.engine import ddl, strategies
+from sqlalchemy.engine import ddl
 from sqlalchemy.sql import schema
 from sqlalchemy.sql.type_api import TypeEngine
-from sqlalchemy import func
+
 from .base import (
-    ModelManager,
-    ModelSerializer,
-    Model,
-    ModelMeta,
     JSONModel,
     JSONSerializer,
+    Model,
+    ModelManager,
+    ModelMeta,
+    ModelSerializer,
+    RestoreStateFn,
     ScopeType,
     StateType,
-    RestoreStateFn,
     find_subclasses,
-    is_primitive_member,
-    is_db_field,
-    resolve_member_types,
     generate_function,
+    is_db_field,
+    is_primitive_member,
+    resolve_member_types,
 )
 
 # kwargs reserved for sqlalchemy table columns
@@ -1563,7 +1554,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
                     [
                         f"if isinstance(v, rel_model_{f}):",
                         f"    self.{f} = v",
-                        f"else:",
+                        "else:",
                         f"    self.{f} = {obj}",
                     ]
                 )
@@ -1589,9 +1580,9 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
                 handler = "pass"
             template.extend(
                 [
-                    f"    try:",
+                    "    try:",
                     f"        {expr}",
-                    f"    except Exception as e:",
+                    "    except Exception as e:",
                     f"        {handler}",
                 ]
             )

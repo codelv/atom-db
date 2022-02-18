@@ -1,13 +1,28 @@
-import pytest
 import logging
-from atom.api import *
+
+import pytest
+from atom.api import (
+    Bool,
+    Coerced,
+    Dict,
+    ForwardInstance,
+    ForwardTyped,
+    Instance,
+    Int,
+    List,
+    Property,
+    Set,
+    Tuple,
+    Typed,
+)
+
 from atomdb.base import (
     Model,
     ModelManager,
     ModelSerializer,
+    generate_function,
     is_db_field,
     is_primitive_member,
-    generate_function,
 )
 
 
@@ -44,6 +59,8 @@ class Dummy(Model):
     instance_of_model = Instance(AbstractModel)
     forwarded_instance = ForwardInstance(lambda: NotYetDefined)
     coerced_int = Coerced(int)
+    prop = Property(lambda self: True)
+    tagged_prop = Property(lambda self: 0).tag(store=True)
 
 
 class NotYetDefined:
@@ -94,6 +111,7 @@ async def test_model():
     state["removed_field"] = "no-longer-exists"
     state["rating"] = 3.5  # Type changed
     obj = await AbstractModel.restore(state)
+    assert obj.rating == 0
 
 
 @pytest.mark.parametrize(
@@ -102,6 +120,8 @@ async def test_model():
         ("id", True),
         ("_private", False),
         ("computed", False),
+        ("prop", False),
+        ("tagged_prop", True),
     ),
 )
 def test_is_db_field(attr, expected):
@@ -135,6 +155,8 @@ def test_is_db_field(attr, expected):
         ("dict_of_str_any", False),
         ("dict_of_str_int", True),
         ("coerced_int", True),
+        ("prop", False),
+        ("tagged_prop", False),
     ),
 )
 def test_is_primitive_member(attr, expected):
@@ -166,7 +188,7 @@ async def test_on_error_raise():
         value = Int()
 
     with pytest.raises(TypeError):
-        a = await A.restore({"value": "str"})
+        await A.restore({"value": "str"})
 
 
 async def test_on_error_ignore():
@@ -197,4 +219,4 @@ async def test_on_error_log(caplog):
         assert c.new_field == 1
         assert "Error loading state:" in caplog.text
         assert f"{C.__model__}.old_field" in caplog.text
-        assert f"object must be of type 'int'" in caplog.text
+        assert "object must be of type 'int'" in caplog.text
