@@ -917,7 +917,6 @@ class SQLQuerySet(Atom, Generic[T]):
         use_labels = bool(self.related_clauses)
         outer_join = self.outer_join
         for clause in self.related_clauses:
-            from_table = p.table
             rel_model = model
 
             # Walk the fk relations
@@ -929,7 +928,7 @@ class SQLQuerySet(Atom, Generic[T]):
                 rel_model = rel_model_types[0]
                 assert issubclass(rel_model, Model)
                 table = rel_model.objects.table
-                from_table = sa.join(from_table, table, isouter=outer_join)
+                from_table = from_table.join(table, isouter=outer_join)
                 tables.append(table)
 
         if query_type == "select":

@@ -1,3 +1,7 @@
+# 0.7.5
+
+- Fix a bug preventing select_related on multiple fields from working
+
 # 0.7.4
 
 - Do not save Property members by default

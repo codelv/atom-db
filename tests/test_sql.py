@@ -75,10 +75,15 @@ class Job(SQLModel):
     duration = Instance(timedelta)
 
 
+class JobSkill(SQLModel):
+    name = Str().tag(length=64, unique=True)
+
+
 class JobRole(SQLModel):
     name = Str().tag(length=64)
     default = Bool()
     job = Instance(Job)
+    skill = Instance(JobSkill)
     tasks = Relation(lambda: JobTask)
 
     check_one_default = sa.schema.DDL(
@@ -482,7 +487,7 @@ async def test_query(db):
 
 
 async def test_query_related(db):
-    await reset_tables(User, Job, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     job = await Job.objects.create(name=faker.job())
     job1 = await Job.objects.create(name=faker.job())
@@ -515,7 +520,7 @@ async def test_query_related(db):
 
 
 async def test_query_related_reverse(db):
-    await reset_tables(User, Job, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     job = await Job.objects.create(name=faker.job())
     job1 = await Job.objects.create(name=faker.job())
@@ -651,7 +656,7 @@ async def test_query_bad_column_name(db):
 
 
 async def test_query_select_related(db):
-    await reset_tables(Job, JobRole)
+    await reset_tables(Job, JobSkill, JobRole)
     # Create second user
     job = await Job.objects.create(name=faker.job())
     await JobRole.objects.create(job=job, name=faker.job())
@@ -683,6 +688,44 @@ async def test_query_select_related(db):
     assert len(set(roles)) == 2
     assert roles[0].job.__restored__ is True
     assert roles[1].job is None
+
+
+async def test_query_select_related_multiple(db):
+    await reset_tables(Job, JobSkill, JobRole)
+    await JobRole.objects.create(
+        job=await Job.objects.create(name="Manager"),
+        skill=await JobSkill.objects.create(name="Excel"),
+        name="Sr Manager",
+    )
+    await JobRole.objects.create(
+        job=await Job.objects.create(name="Dev"),
+        skill=await JobSkill.objects.create(name="Python"),
+        name="Sr Dev",
+    )
+
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+    JobSkill.objects.cache.clear()
+
+    # With select related the job is fully loaded
+    # since the second role does not set a job it is excluded due to the
+    # default inner join
+    q = JobRole.objects.select_related("job", "skill").order_by("name").all()
+    roles = await q
+    # for role in roles:
+    #    print((role.name, role.job.name, role.skill.name))
+    assert len(roles) == 2
+    assert roles[0].name == "Sr Dev"
+    assert roles[0].job.__restored__ is True
+    assert roles[0].job.name == "Dev"
+    assert roles[0].skill.__restored__ is True
+    assert roles[0].skill.name == "Python"
+
+    assert roles[1].name == "Sr Manager"
+    assert roles[1].job.__restored__ is True
+    assert roles[1].job.name == "Manager"
+    assert roles[1].skill.__restored__ is True
+    assert roles[1].skill.name == "Excel"
 
 
 async def test_query_prefetch_related_invalid(db):
@@ -878,7 +921,7 @@ async def test_query_distinct(db):
 
 
 async def test_get_or_create(db):
-    await reset_tables(User, Job, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     name = faker.name()
     email = faker.email()
@@ -903,7 +946,7 @@ async def test_get_or_create(db):
 
 
 async def test_create(db):
-    await reset_tables(Job, JobRole)
+    await reset_tables(Job, JobSkill, JobRole)
 
     job = await Job.objects.create(name=faker.job())
     assert job and job._id
@@ -914,7 +957,7 @@ async def test_create(db):
 
 
 async def test_transaction_rollback(db):
-    await reset_tables(Job, JobRole)
+    await reset_tables(Job, JobSkill, JobRole)
 
     with pytest.raises(ValueError):
         async with Job.objects.connection() as conn:
@@ -944,7 +987,7 @@ async def test_transaction_rollback(db):
 
 
 async def test_transaction_commit(db):
-    await reset_tables(Job, JobRole)
+    await reset_tables(Job, JobSkill, JobRole)
 
     async with Job.objects.connection() as conn:
         trans = await conn.begin()
@@ -1103,7 +1146,7 @@ async def test_column_rename(db):
 
 
 async def test_query_many_to_one(db):
-    await reset_tables(Job, JobRole)
+    await reset_tables(Job, JobSkill, JobRole)
 
     jobs = []
 
@@ -1159,7 +1202,7 @@ async def test_query_many_to_one(db):
 
 
 async def test_query_multiple_joins(db):
-    await reset_tables(Job, JobRole, JobTask)
+    await reset_tables(Job, JobSkill, JobRole, JobTask)
 
     ceo = await Job.objects.create(name="CEO")
     cfo = await Job.objects.create(name="CFO")
