@@ -1090,11 +1090,14 @@ async def test_filter_exclude(db):
     await reset_tables(User)
     # Create second user
     await User.objects.create(name="Bob", email="bob@other.com", age=40, active=True)
-    await User.objects.create(name="Jack", email="jack@company.com", age=30, active=False)
+    await User.objects.create(
+        name="Jack", email="jack@company.com", age=30, active=False
+    )
     await User.objects.create(name="Bob", email="bob@company.com", age=20, active=False)
 
     users = await User.objects.filter(name__startswith="B").exclude(
-        email__endswith="other.com")
+        email__endswith="other.com"
+    )
     assert len(users) == 1 and users[0].email == "bob@company.com"
 
     users = await User.objects.exclude(active=True, age__lt=25)

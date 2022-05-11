@@ -1074,7 +1074,7 @@ class SQLQuerySet(Atom, Generic[T]):
         )
 
     def where_clause(self, k: str, v: Any, related_clauses: ListType):
-        """ Create a where clause from a django-style parameter.
+        """Create a where clause from a django-style parameter.
         This will modify the list of related clauses if a join occurs.
 
         Parameters
