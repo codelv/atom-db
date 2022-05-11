@@ -1,6 +1,7 @@
 # 0.7.5
 
 - Fix a bug preventing select_related on multiple fields from working
+- Add django style `exclude` to filter
 
 # 0.7.4
 

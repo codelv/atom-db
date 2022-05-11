@@ -1036,17 +1036,17 @@ async def test_filters(db):
     await reset_tables(User)
 
     user, created = await User.objects.get_or_create(
-        name=faker.name(), email=faker.email(), age=21, active=True
+        name="Bob", email=faker.email(), age=21, active=True
     )
     assert created
 
     user2, created = await User.objects.get_or_create(
-        name=faker.name(), email=faker.email(), age=48, active=False, rating=10.0
+        name="Tom", email=faker.email(), age=48, active=False, rating=10.0
     )
     assert created
 
     # Startswith
-    u = await User.objects.get(name__startswith=user.name[0])
+    u = await User.objects.get(name__startswith="B")
     assert u.name == user.name
     assert u is user  # Now cached
 
@@ -1070,6 +1070,9 @@ async def test_filters(db):
     users = await User.objects.filter(age__lt=30)
     assert len(users) == 1 and users[0].age == user.age
 
+    users = await User.objects.exclude(age=21)
+    assert len(users) == 1 and users[0].age == 48
+
     # Not supported
     with pytest.raises(ValueError):
         users = await User.objects.filter(age__xor=1)
@@ -1081,6 +1084,24 @@ async def test_filters(db):
     # Invalid name
     with pytest.raises(ValueError):
         users = await User.objects.filter(does_not_exist=True)
+
+
+async def test_filter_exclude(db):
+    await reset_tables(User)
+    # Create second user
+    await User.objects.create(name="Bob", email="bob@other.com", age=40, active=True)
+    await User.objects.create(name="Jack", email="jack@company.com", age=30, active=False)
+    await User.objects.create(name="Bob", email="bob@company.com", age=20, active=False)
+
+    users = await User.objects.filter(name__startswith="B").exclude(
+        email__endswith="other.com")
+    assert len(users) == 1 and users[0].email == "bob@company.com"
+
+    users = await User.objects.exclude(active=True, age__lt=25)
+    assert len(users) == 1 and users[0].name == "Jack"
+
+    users = await User.objects.exclude(name="Bob")
+    assert len(users) == 1 and users[0].name == "Jack"
 
 
 async def test_update(db):

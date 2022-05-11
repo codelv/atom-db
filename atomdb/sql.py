@@ -1073,6 +1073,43 @@ class SQLQuerySet(Atom, Generic[T]):
             distinct_clauses=distinct_clauses, related_clauses=related_clauses
         )
 
+    def where_clause(self, k: str, v: Any, related_clauses: ListType):
+        """ Create a where clause from a django-style parameter.
+        This will modify the list of related clauses if a join occurs.
+
+        Parameters
+        ----------
+        k: str
+            The filter key, eg name__startswith
+        v: object
+            The value
+        related_clauses: list
+            List of related clauses
+
+        Returns
+        -------
+        clause: sqlalchemy.sq.expression
+            The filter clause
+
+        """
+        model = self.proxy.model
+        op = "eq"
+        if "__" in k:
+            parts = k.split("__")
+            if parts[-1] in QUERY_OPS:
+                op = parts[-1]
+                k = "__".join(parts[:-1])
+        col = resolve_member_column(model, k, related_clauses)
+
+        # Support lookups by model
+        if isinstance(v, Model):
+            v = v.serializer.flatten_object(v, scope={})
+        elif op in ("in", "notin"):
+            # Flatten lists when using in or notin ops
+            v = model.serializer.flatten(v, scope={})
+
+        return getattr(col, QUERY_OPS[op])(v)
+
     def filter(self, *args, **kwargs: DictType[str, Any]):
         """Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
@@ -1094,30 +1131,53 @@ class SQLQuerySet(Atom, Generic[T]):
         filter_clauses = self.filter_clauses + list(args)
         related_clauses = self.related_clauses[:]
 
-        connection_kwarg, restore_kwarg = p.connection_kwarg, p.restore_kwarg
+        connection_kwarg = p.connection_kwarg
+        restore_kwarg = p.restore_kwarg
 
         # Build the filter operations
         for k, v in kwargs.items():
             if k == connection_kwarg or k == restore_kwarg:
                 continue
-            model = p.model
-            op = "eq"
-            if "__" in k:
-                parts = k.split("__")
-                if parts[-1] in QUERY_OPS:
-                    op = parts[-1]
-                    k = "__".join(parts[:-1])
-            col = resolve_member_column(model, k, related_clauses)
+            filter_clauses.append(self.where_clause(k, v, related_clauses))
 
-            # Support lookups by model
-            if isinstance(v, Model):
-                v = v.serializer.flatten_object(v, scope={})
-            elif op in ("in", "notin"):
-                # Flatten lists when using in or notin ops
-                v = model.serializer.flatten(v, scope={})
+        return self.clone(
+            connection=kwargs.get(connection_kwarg, self.connection),
+            force_restore=kwargs.get(restore_kwarg, self.force_restore),
+            filter_clauses=filter_clauses,
+            related_clauses=related_clauses,
+        )
 
-            clause = getattr(col, QUERY_OPS[op])(v)
-            filter_clauses.append(clause)
+    def exclude(self, *args, **kwargs: DictType[str, Any]):
+        """Exclude results matching the given parameters by wrapping each
+        clause in a NOT expression. This accepts sqlalchemy filters by
+        arguments and django-style parameters as kwargs.
+
+        Parameters
+        ----------
+        args: List
+            List of sqlalchemy filters
+        kwargs: Dict[str, object]
+            Django style filters to use
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the excluded filter terms added.
+
+        """
+        p = self.proxy
+        filter_clauses = self.filter_clauses + [sa.not_(it) for it in args]
+        related_clauses = self.related_clauses[:]
+
+        connection_kwarg = p.connection_kwarg
+        restore_kwarg = p.restore_kwarg
+
+        # Build the filter operations
+        for k, v in kwargs.items():
+            if k == connection_kwarg or k == restore_kwarg:
+                continue
+            clause = self.where_clause(k, v, related_clauses)
+            filter_clauses.append(sa.not_(clause))
 
         return self.clone(
             connection=kwargs.get(connection_kwarg, self.connection),
