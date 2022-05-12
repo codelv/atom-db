@@ -1,3 +1,7 @@
+# 0.7.6
+
+- Change internal data types to set to speed up building queries and allow caching
+
 # 0.7.5
 
 - Fix a bug preventing select_related on multiple fields from working

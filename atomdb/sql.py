@@ -17,9 +17,7 @@ from typing import Any
 from typing import Callable as CallableType
 from typing import ClassVar
 from typing import Dict as DictType
-from typing import Generic, Iterator
-from typing import List as ListType
-from typing import Optional, Sequence
+from typing import Generic, Iterator, Optional, Sequence
 from typing import Set as SetType
 from typing import Tuple as TupleType
 from typing import Type, TypeVar, Union, cast
@@ -38,6 +36,7 @@ from atom.api import (
     Int,
     List,
     Member,
+    Set,
     Str,
     Typed,
     Value,
@@ -243,9 +242,10 @@ def py_type_to_sql_column(
     )
 
 
+@functools.lru_cache(1024)
 def resolve_member_column(
-    model: Type["SQLModel"], field: str, related_clauses: Optional[ListType[str]] = None
-) -> sa.Column:
+    model: Type["SQLModel"], field: str
+) -> TupleType[sa.Column, SetType[str]]:
     """Get the sqlalchemy column for the given model and field.
 
     Parameters
@@ -257,21 +257,21 @@ def resolve_member_column(
 
     Returns
     -------
-    result: sa.Column
-        A tuple containing the through table (or None) and the
-        sqlalchemy column.
+    result: tuple[sa.Column, set[str]]
+        A tuple the sqlalchemy column for the model field and the set of
+        related clauses needed to join across foreign keys.
 
     """
     if model is None or not field:
         raise ValueError("Invalid field %s on %s" % (field, model))
 
     # Walk the relations
+    related_clauses = set()
     if "__" in field:
         path = field
-        *related_parts, field = field.split("__")
+        *related_parts, field = field.rsplit("__")
         clause = "__".join(related_parts)
-        if related_clauses is not None and clause not in related_clauses:
-            related_clauses.append(clause)
+        related_clauses.add(clause)
 
         # Follow the FK lookups
         # Rename so the original lookup path is retained if an error occurs
@@ -297,8 +297,7 @@ def resolve_member_column(
             model = m.to  # type: ignore
 
             # Add the through table to the related clauses if needed
-            if related_clauses is not None and field not in related_clauses:
-                related_clauses.append(field)
+            related_clauses.add(field)
 
             field = model.__pk__
 
@@ -306,10 +305,10 @@ def resolve_member_column(
     col = model.objects.table.columns.get(field)
     if col is None:
         raise ValueError("Invalid field %s on %s" % (field, model))
-    return col
+    return col, related_clauses
 
 
-@functools.lru_cache(256)
+@functools.lru_cache(1024)
 def resolve_relation(
     model: Type["SQLModel"], field: str
 ) -> TupleType[Member, Type[Model], Member, sa.Column]:
@@ -774,7 +773,7 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.fetchall()
 
-    async def fetchmany(self, query, size=None, connection=None):
+    async def fetchmany(self, query, size: Optional[int] = None, connection=None):
         """Fetch size results for the query.
 
         Parameters
@@ -838,7 +837,7 @@ class SQLTableProxy(Atom, Generic[T]):
         """Get or create a model matching the given criteria
 
         Parameters
-        ----------
+        ----------author__name="Tom",
         filters: Dict
             The filters to use to retrieve the object
 
@@ -893,11 +892,11 @@ class SQLQuerySet(Atom, Generic[T]):
     connection = Value()
 
     filter_clauses = List()
-    related_clauses = List()
-    prefetch_clauses = List()
+    related_clauses = Set()
+    prefetch_clauses = Set()
     outer_join = Bool()
     order_clauses = List()
-    distinct_clauses = List()
+    distinct_clauses = Set()
     limit_count = Int()
     query_offset = Int()
     force_restore = Bool()
@@ -980,7 +979,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         outer_join = self.outer_join if outer_join is None else outer_join
-        related_clauses = self.related_clauses + list(related)
+        related_clauses = self.related_clauses | set(related)
         return self.clone(related_clauses=related_clauses, outer_join=outer_join)
 
     def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
@@ -1001,7 +1000,7 @@ class SQLQuerySet(Atom, Generic[T]):
         for r in related:
             assert resolve_relation(self.proxy.model, r)
 
-        prefetch_clauses = self.prefetch_clauses + list(related)
+        prefetch_clauses = self.prefetch_clauses | set(related)
 
         return self.clone(prefetch_clauses=prefetch_clauses)
 
@@ -1020,7 +1019,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         order_clauses = self.order_clauses[:]
-        related_clauses = self.related_clauses[:]
+        related_clauses = self.related_clauses.copy()
         model = self.proxy.model
         for arg in args:
             if isinstance(arg, str):
@@ -1032,7 +1031,8 @@ class SQLQuerySet(Atom, Generic[T]):
                     field = arg
                     ascending = True
 
-                col = resolve_member_column(model, field, related_clauses)
+                col, new_clauses = resolve_member_column(model, field)
+                related_clauses.update(new_clauses)
 
                 if ascending:
                     clause = col.asc()
@@ -1058,22 +1058,22 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the distinct terms added.
 
         """
-        distinct_clauses = self.distinct_clauses[:]
-        related_clauses = self.related_clauses[:]
+        distinct_clauses = self.distinct_clauses.copy()
+        related_clauses = self.related_clauses.copy()
         model = self.proxy.model
         for arg in args:
             if isinstance(arg, str):
                 # Convert name to sqlalchemy column
-                clause = resolve_member_column(model, arg, related_clauses)
+                clause, new_clauses = resolve_member_column(model, arg)
+                related_clauses.update(new_clauses)
             else:
                 clause = arg
-            if clause not in distinct_clauses:
-                distinct_clauses.append(clause)
+            distinct_clauses.add(clause)
         return self.clone(
             distinct_clauses=distinct_clauses, related_clauses=related_clauses
         )
 
-    def where_clause(self, k: str, v: Any, related_clauses: ListType):
+    def where_clause(self, k: str, v: Any, related_clauses: SetType[str]):
         """Create a where clause from a django-style parameter.
         This will modify the list of related clauses if a join occurs.
 
@@ -1099,7 +1099,8 @@ class SQLQuerySet(Atom, Generic[T]):
             if parts[-1] in QUERY_OPS:
                 op = parts[-1]
                 k = "__".join(parts[:-1])
-        col = resolve_member_column(model, k, related_clauses)
+        col, new_clauses = resolve_member_column(model, k)
+        related_clauses.update(new_clauses)
 
         # Support lookups by model
         if isinstance(v, Model):
@@ -1129,7 +1130,7 @@ class SQLQuerySet(Atom, Generic[T]):
         """
         p = self.proxy
         filter_clauses = self.filter_clauses + list(args)
-        related_clauses = self.related_clauses[:]
+        related_clauses = self.related_clauses.copy()
 
         connection_kwarg = p.connection_kwarg
         restore_kwarg = p.restore_kwarg
@@ -1167,7 +1168,7 @@ class SQLQuerySet(Atom, Generic[T]):
         """
         p = self.proxy
         filter_clauses = self.filter_clauses + [sa.not_(it) for it in args]
-        related_clauses = self.related_clauses[:]
+        related_clauses = self.related_clauses.copy()
 
         connection_kwarg = p.connection_kwarg
         restore_kwarg = p.restore_kwarg
@@ -1244,7 +1245,7 @@ class SQLQuerySet(Atom, Generic[T]):
             columns = []
             for col in args:
                 if isinstance(col, str):
-                    col = resolve_member_column(model, col)
+                    col, _ = resolve_member_column(model, col)
                 columns.append(col)
             q = self.query("select", *columns)
         else:
@@ -1282,7 +1283,7 @@ class SQLQuerySet(Atom, Generic[T]):
         columns = []
         for col in args:
             if isinstance(col, str):
-                col = resolve_member_column(model, col)
+                col, _ = resolve_member_column(model, col)
             columns.append(func(col) if func is not None else col)
         subq = self.query("select").alias("subquery")
         q = sa.select(columns).select_from(subq)

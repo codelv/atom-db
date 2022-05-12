@@ -1436,3 +1436,20 @@ def test_benchmark(db, event_loop, benchmark):
         event_loop.run_until_complete(Image.objects.all())
 
     benchmark(run)
+
+
+@pytest.mark.benchmark(group="sql-build-query")
+def test_benchmark_filter_related_query(db, benchmark):
+
+    def query():
+        q = Page.objects.filter(author__name="Tom", status="live")
+
+    benchmark(query)
+
+@pytest.mark.benchmark(group="sql-build-query")
+def test_benchmark_filter_query(db, benchmark):
+
+    def query():
+        q = Page.objects.filter(status="live")
+
+    benchmark(query)
