@@ -956,6 +956,17 @@ async def test_create(db):
         await Job.objects.create(name=job.name)
 
 
+async def test_bulk_create(db):
+    await reset_tables(User)
+    assert await User.objects.count() == 0
+    # TODO: Get the id's of the rows inserted?
+    users = await User.objects.bulk_create([User(name=f"user-{i}") for i in range(10)])
+    for u in users:
+        if not IS_MYSQL:
+            assert u._id
+    assert await User.objects.count() == 10
+
+
 async def test_transaction_rollback(db):
     await reset_tables(Job, JobSkill, JobRole)
 

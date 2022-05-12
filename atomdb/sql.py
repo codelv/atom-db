@@ -837,7 +837,7 @@ class SQLTableProxy(Atom, Generic[T]):
         """Get or create a model matching the given criteria
 
         Parameters
-        ----------author__name="Tom",
+        ----------
         filters: Dict
             The filters to use to retrieve the object
 
@@ -879,6 +879,47 @@ class SQLTableProxy(Atom, Generic[T]):
         obj = cast(T, self.model(**state))
         await obj.save(force_insert=True, connection=connection)
         return obj
+
+    async def bulk_create(self, items: Sequence[T], connection=None) -> Sequence[T]:
+        """Perform a bulk create from a sequence of models. This will
+        populate the primary key of the items as needed but will not pull
+        any fields that have not been defined. The restored flag will still
+        be False.
+
+        Parameters
+        ----------
+        items: Sequence[T]
+            The list of items to create.
+        connection: Connetion
+            The connection to use (if None one from the pool will be used)
+
+        Returns
+        -------
+        items: Sequence[T]
+            The items passed in. Only postgres will populate the primary keys.
+
+        """
+        table = self.table
+        values = [item.__prepare_state_for_db__() for item in items]
+        async with self.connection(connection) as conn:
+            # TODO: Properly detect?
+            postgres = "aiopg" in conn.__class__.__module__
+            if postgres:
+                pk_column = table.c[self.model.__pk__]
+                q = table.insert().returning(pk_column).values(values)
+            else:
+                # TODO: Get return value?
+                q = table.insert().values(values)
+
+            result = await conn.execute(q)
+            if postgres:
+                cache = self.cache
+                for r, item in zip(await result.fetchall(), items):
+                    # Don't overwrite if force inserting
+                    if not item._id:
+                        item._id = r[0]
+                    cache[item._id] = item
+            return items
 
     def __getattr__(self, name: str):
         """All other fields are delegated to the query set"""
@@ -1925,6 +1966,24 @@ class SQLModel(Model, metaclass=SQLMeta):
         state = await db.fetchone(q, connection=connection)
         await self.__restorestate__(state)
 
+    def __prepare_state_for_db__(self):
+        """Get the state that should be saved into the database"""
+        state = self.__getstate__()
+
+        # Remove any fields are in the state but should not go into the db
+        for f in self.__excluded_fields__:
+            state.pop(f, None)
+
+        # Replace any renamed fields
+        for py_name, db_name in self.__renamed_fields__.items():
+            state[db_name] = state.pop(py_name)
+
+        if not self._id:
+            # Postgres errors if using None for the pk
+            state.pop(self.__pk__, None)
+
+        return state
+
     async def save(
         self: T,
         force_insert: bool = False,
@@ -1955,17 +2014,8 @@ class SQLModel(Model, metaclass=SQLMeta):
             raise ValueError("Cannot use force_insert and force_update together")
 
         db = self.objects
-        state = self.__getstate__()
-
-        # Remove any fields are in the state but should not go into the db
-        for f in self.__excluded_fields__:
-            state.pop(f, None)
-
-        # Replace any renamed fields
-        for py_name, db_name in self.__renamed_fields__.items():
-            state[db_name] = state.pop(py_name)
-
         table = db.table
+        state = self.__prepare_state_for_db__()
         async with db.connection(connection) as conn:
             if force_update or (self._id and not force_insert):
 
@@ -1990,9 +2040,6 @@ class SQLModel(Model, metaclass=SQLMeta):
                         f"pk={self._id} exist or it has not changed."
                     )
             else:
-                if not self._id:
-                    # Postgres errors if using None for the pk
-                    state.pop(self.__pk__, None)
                 q = table.insert().values(**state)
                 r = await conn.execute(q)
 
