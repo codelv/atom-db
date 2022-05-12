@@ -931,8 +931,9 @@ class SQLQuerySet(Atom, Generic[T]):
                 tables.append(table)
 
         if query_type == "select":
-            q = sa.select(columns or tables, use_labels=use_labels)
-            q = q.select_from(from_table)
+            q = sa.select(columns or tables, use_labels=use_labels).select_from(
+                from_table
+            )
         elif query_type == "delete":
             q = sa.delete(from_table)
         elif query_type == "update":
@@ -978,9 +979,10 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the related field terms added.
 
         """
-        outer_join = self.outer_join if outer_join is None else outer_join
-        related_clauses = self.related_clauses | set(related)
-        return self.clone(related_clauses=related_clauses, outer_join=outer_join)
+        return self.clone(
+            related_clauses=self.related_clauses | set(related),
+            outer_join=self.outer_join if outer_join is None else outer_join,
+        )
 
     def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
         """Define related fields to prefetch in a separate query.
@@ -999,17 +1001,14 @@ class SQLQuerySet(Atom, Generic[T]):
         # Validate relations
         for r in related:
             assert resolve_relation(self.proxy.model, r)
+        return self.clone(prefetch_clauses=self.prefetch_clauses | set(related))
 
-        prefetch_clauses = self.prefetch_clauses | set(related)
-
-        return self.clone(prefetch_clauses=prefetch_clauses)
-
-    def order_by(self, *args):
+    def order_by(self, *args) -> "SQLQuerySet[T]":
         """Order the query by the given fields.
 
         Parameters
         ----------
-        args: List[str or column]
+        args: list[str or column]
             Fields to order by. A "-" prefix denotes decending.
 
         Returns
@@ -1022,6 +1021,8 @@ class SQLQuerySet(Atom, Generic[T]):
         related_clauses = self.related_clauses.copy()
         model = self.proxy.model
         for arg in args:
+            if not arg:
+                continue
             if isinstance(arg, str):
                 # Convert django-style to sqlalchemy ordering column
                 if arg[0] == "-":
@@ -1044,12 +1045,12 @@ class SQLQuerySet(Atom, Generic[T]):
                 order_clauses.append(clause)
         return self.clone(order_clauses=order_clauses, related_clauses=related_clauses)
 
-    def distinct(self, *args):
+    def distinct(self, *args) -> "SQLQuerySet[T]":
         """Apply distinct on the given column.
 
         Parameters
         ----------
-        args: List[str or column]
+        args: list[str or column]
             Fields that must be distinct.
 
         Returns
@@ -1083,8 +1084,8 @@ class SQLQuerySet(Atom, Generic[T]):
             The filter key, eg name__startswith
         v: object
             The value
-        related_clauses: list
-            List of related clauses
+        related_clauses: set[str]
+            Set of related clauses needed
 
         Returns
         -------
@@ -1095,10 +1096,11 @@ class SQLQuerySet(Atom, Generic[T]):
         model = self.proxy.model
         op = "eq"
         if "__" in k:
-            parts = k.split("__")
-            if parts[-1] in QUERY_OPS:
-                op = parts[-1]
-                k = "__".join(parts[:-1])
+            field, maybe_op = k.rsplit("__", 1)
+            if maybe_op in QUERY_OPS:
+                op = maybe_op
+                k = field
+
         col, new_clauses = resolve_member_column(model, k)
         related_clauses.update(new_clauses)
 
@@ -1111,7 +1113,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
         return getattr(col, QUERY_OPS[op])(v)
 
-    def filter(self, *args, **kwargs: DictType[str, Any]):
+    def filter(self, *args, **kwargs: DictType[str, Any]) -> "SQLQuerySet[T]":
         """Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
 
@@ -1148,7 +1150,7 @@ class SQLQuerySet(Atom, Generic[T]):
             related_clauses=related_clauses,
         )
 
-    def exclude(self, *args, **kwargs: DictType[str, Any]):
+    def exclude(self, *args, **kwargs: DictType[str, Any]) -> "SQLQuerySet[T]":
         """Exclude results matching the given parameters by wrapping each
         clause in a NOT expression. This accepts sqlalchemy filters by
         arguments and django-style parameters as kwargs.
@@ -1187,7 +1189,7 @@ class SQLQuerySet(Atom, Generic[T]):
             related_clauses=related_clauses,
         )
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Union[int, slice]) -> "SQLQuerySet[T]":
         if isinstance(key, slice):
             offset = key.start or 0
             limit = key.stop - key.start if key.stop else 0
@@ -1202,10 +1204,10 @@ class SQLQuerySet(Atom, Generic[T]):
             raise ValueError("Cannot use a negative limit")
         return self.clone(limit_count=limit, query_offset=offset)
 
-    def limit(self, limit: int):
+    def limit(self, limit: int) -> "SQLQuerySet[T]":
         return self.clone(limit_count=limit)
 
-    def offset(self, offset: int):
+    def offset(self, offset: int) -> "SQLQuerySet[T]":
         return self.clone(query_offset=offset)
 
     # -------------------------------------------------------------------------
