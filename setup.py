@@ -32,4 +32,5 @@ setup(
         "motor",  # nosql database support
     ],
     packages=find_packages(),
+    package_data={'atomdb': ["py.typed"]}
 )

@@ -2,6 +2,7 @@
 
 - Change internal data types to set to speed up building queries and allow caching
 - Add a `bulk_create` method to the model manager.
+- Add `py.typed` to package
 
 # 0.7.5
 
