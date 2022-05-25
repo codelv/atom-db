@@ -1,3 +1,8 @@
+# 0.7.7
+
+- Return from bulk_create if values list is empty
+- Fix problem with order_by not having __bool__ defined
+
 # 0.7.6
 
 - Change internal data types to set to speed up building queries and allow caching

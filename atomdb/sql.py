@@ -901,6 +901,8 @@ class SQLTableProxy(Atom, Generic[T]):
         """
         table = self.table
         values = [item.__prepare_state_for_db__() for item in items]
+        if not values:
+            return items
         async with self.connection(connection) as conn:
             # TODO: Properly detect?
             postgres = "aiopg" in conn.__class__.__module__
@@ -1062,8 +1064,6 @@ class SQLQuerySet(Atom, Generic[T]):
         related_clauses = self.related_clauses.copy()
         model = self.proxy.model
         for arg in args:
-            if not arg:
-                continue
             if isinstance(arg, str):
                 # Convert django-style to sqlalchemy ordering column
                 if arg[0] == "-":
