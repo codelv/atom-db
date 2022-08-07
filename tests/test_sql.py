@@ -128,6 +128,12 @@ class ImageInfo(JSONModel):
     depth = Int()
 
 
+async def unflatten_image_info(v, scope):
+    if v is None:
+        return ImageInfo()
+    return await ImageInfo.restore(v)
+
+
 class Image(SQLModel):
     name = Str().tag(length=100)
     path = Str().tag(length=200)
@@ -139,7 +145,7 @@ class Image(SQLModel):
     # size = Tuple(int).tag(nullable=True)
 
     #: Maps to sa.JSON
-    info = Instance(ImageInfo, ())
+    info = Instance(ImageInfo, ()).tag(unflatten=unflatten_image_info)
 
 
 class BigInt(Int):

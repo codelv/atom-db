@@ -82,6 +82,9 @@ COLUMN_KWARGS = (
 )
 FK_TYPES = (Instance, Typed, ForwardInstance, ForwardTyped)
 
+# kwargs reserved for the serializer
+SERIALIZE_KWARGS = ("flatten", "unflatten")
+
 # ops that can be used with django-style queries
 QUERY_OPS = {
     "eq": "__eq__",
@@ -464,6 +467,8 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
     metadata.pop("store", None)
     column_name = metadata.pop("name", member.name)
     column_type = metadata.pop("type", None)
+    for k in SERIALIZE_KWARGS:
+        metadata.pop(k, None)
 
     # Extract column kwargs from member metadata
     kwargs = {}

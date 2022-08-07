@@ -1,3 +1,7 @@
+# 0.7.8
+
+- Fix problem with flatten/unflatten creating invalid columns.
+
 # 0.7.7
 
 - Return from bulk_create if values list is empty
