@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10']
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
     services:
       postgres:
         image: postgres
@@ -82,7 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10']
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
 
     services:
       mongodb:
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10']
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
     steps:
       - uses: actions/checkout@v2
       - name: Setup python ${{ matrix.python-version}}
@@ -118,12 +118,9 @@ jobs:
         run: pip install -U motor aiopg aiomysql sqlalchemy mypy black isort flake8
       - name: Run checks
         run: |
-            isort atomdb --check --diff
-            isort tests --check --diff
-            black atomdb --check --diff
-            black tests --check --diff
+            isort atomdb tests --check --diff
+            black atomdb tests --check --diff
             mypy atomdb --ignore-missing-imports
-            flake8 --ignore=E501 atomdb
-            flake8 --ignore=E501 tests
+            flake8 --ignore=E501 atomdb tests
 
 

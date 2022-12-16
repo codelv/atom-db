@@ -1,3 +1,7 @@
+# 0.7.9
+
+- Fix error with 3.11
+
 # 0.7.8
 
 - Fix problem with flatten/unflatten creating invalid columns.

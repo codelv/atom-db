@@ -42,7 +42,7 @@ from atom.api import (
     Value,
     set_default,
 )
-from bytecode import Bytecode, Instr, Label
+from bytecode import Bytecode, Instr
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -628,9 +628,8 @@ def generate_function(
     if optimize:
         bc = Bytecode.from_code(fn.__code__)
         for i, inst in enumerate(bc):
-            if isinstance(inst, Label):
-                continue
-            if inst.name == "LOAD_GLOBAL" and inst.arg in namespace:
+            name = getattr(inst, "name", None)
+            if name == "LOAD_GLOBAL" and inst.arg in namespace:
                 bc[i] = Instr("LOAD_CONST", namespace[inst.arg])
         fn.__code__ = bc.to_code()
     return fn
