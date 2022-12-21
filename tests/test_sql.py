@@ -2,7 +2,6 @@ import gc
 import logging
 import os
 import random
-import re
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -34,6 +33,9 @@ IS_MYSQL = DATABASE_URL.startswith("mysql")
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
 try:
+    # logging.getLogger("databases").setLevel(logging.DEBUG)
+
+    from databases import Database
     import sqlalchemy as sa
 
     from atomdb.sql import (
@@ -47,14 +49,12 @@ try:
     if IS_MYSQL:
         from pymysql.err import IntegrityError
     elif IS_SQLITE:
-        # logging.getLogger("aiosqlite").setLevel(logging.DEBUG)
-        logging.getLogger("aiosqlite.sa").setLevel(logging.DEBUG)
         from aiosqlite import IntegrityError
     else:
-        from psycopg2.errors import UniqueViolation as IntegrityError
+        from asyncpg.exceptions import UniqueViolationError as IntegrityError
 except ImportError as e:
-    pytest.skip(
-        f"aiomysql, aisosqlite, aiopg not available {e}", allow_module_level=True
+     pytest.skip(
+         f"databases with at least one backend is not available: {e}", allow_module_level=True
     )
 
 faker = Faker()
@@ -241,6 +241,12 @@ class Project(SQLModel):
     doc = Instance(Document)
 
 
+class Score(SQLModel):
+    q1 = Float()
+    q2 = Float()
+
+
+
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -369,63 +375,33 @@ async def reset_tables(*models):
         await Model.objects.create_table()
 
 
+async def create_database(DATABASE_URL):
+    database = Database(DATABASE_URL)
+    scheme = database.url.scheme
+    name = database.url.database
+    if scheme == "sqlite":
+        # params["isolation_level"] = None  # autocommit
+        if os.path.exists(name):
+            os.remove(name)
+    else:
+        if scheme == "postgres":
+            database = Database(database.url.replace(database="postgres"))
+        async with database:
+            async with database.connection() as c:
+                # WARNING: Not safe
+                await c.execute("DROP DATABASE IF EXISTS %s;" % name)
+                await c.execute("CREATE DATABASE %s;" % name)
+
+# TODO: Why does it need to be global???
+database = Database(DATABASE_URL)
+
 @pytest.fixture
 async def db(event_loop):
-
-    if DATABASE_URL.startswith("sqlite"):
-        m = re.match(r"(.+)://(.+)", DATABASE_URL)
-        assert m, "DATABASE_URL is an invalid format"
-        schema, db = m.groups()
-        params = dict(database=db)
-    else:
-        m = re.match(r"(.+)://(.+):(.*)@(.+):(\d+)/(.+)", DATABASE_URL)
-        assert m, "DATABASE_URL is an invalid format"
-        schema, user, pwd, host, port, db = m.groups()
-        params = dict(host=host, port=int(port), user=user, password=pwd)
-
-    if schema == "mysql":
-        from aiomysql import connect
-        from aiomysql.sa import create_engine
-    elif schema == "postgres":
-        from aiopg import connect
-        from aiopg.sa import create_engine
-    elif schema == "sqlite":
-        from aiosqlite import connect
-        from aiosqlite.sa import create_engine
-    else:
-        raise ValueError("Unsupported database schema: %s" % schema)
-
-    if schema == "mysql":
-        params["autocommit"] = True
-
-    params["loop"] = event_loop
-
-    if schema == "sqlite":
-        params["isolation_level"] = None  # autocommit
-        if os.path.exists(db):
-            os.remove(db)
-    else:
-        if schema == "postgres":
-            params["database"] = "postgres"
-
-        async with connect(**params) as conn:
-            async with conn.cursor() as c:
-                # WARNING: Not safe
-                await c.execute("DROP DATABASE IF EXISTS %s;" % db)
-                await c.execute("CREATE DATABASE %s;" % db)
-
-    if schema == "mysql":
-        params["db"] = db
-    elif schema == "postgres":
-        params["database"] = db
-
-    if os.environ.get("ECHO", "").lower() == "true":
-        params["echo"] = True
-
-    async with create_engine(**params) as engine:
+    await create_database(DATABASE_URL)
+    async with database:
         mgr = SQLModelManager.instance()
-        mgr.database = {"default": engine}
-        yield engine
+        mgr.database = {"default": database}
+        yield database
 
 
 def test_query_ops_valid():
@@ -901,10 +877,12 @@ async def test_query_values(db):
     vals = await User.objects.filter(active=True).values()
     assert len(vals) == 1 and vals[0]["email"] == user.email
 
-    assert await User.objects.order_by("name").values("name", distinct=True) == [
-        ("Bob",),
-        ("Jack",),
-    ]
+    vals = await User.objects.order_by("name").values("name", distinct=True)
+    assert [v[0] for v in vals] == ["Bob", "Jack"]
+    assert [v["name"] for v in vals] == ["Bob", "Jack"]
+
+    vals = await User.objects.values("name", "age")
+    assert [tuple(v.values()) for v in vals] == [("Bob", 40), ("Jack", 30), ("Bob", 20)]
 
     assert await User.objects.order_by("age").values("age", flat=True) == [20, 30, 40]
 
@@ -993,7 +971,7 @@ async def test_transaction_rollback(db):
 
     with pytest.raises(ValueError):
         async with Job.objects.connection() as conn:
-            trans = await conn.begin()
+            trans = await conn.transaction()
             try:
                 # Must pass in the connection parameter for transactions
                 job = await Job.objects.create(name=faker.job(), connection=conn)
@@ -1022,7 +1000,7 @@ async def test_transaction_commit(db):
     await reset_tables(Job, JobSkill, JobRole)
 
     async with Job.objects.connection() as conn:
-        trans = await conn.begin()
+        trans = await conn.transaction()
         try:
             # Must pass in the connection parameter for transactions
             job = await Job.objects.create(name=faker.job(), connection=conn)
@@ -1047,7 +1025,7 @@ async def test_transaction_delete(db):
 
     name = faker.name()
     async with User.objects.connection() as conn:
-        trans = await conn.begin()
+        trans = await conn.transaction()
         try:
             # Must pass in the connection parameter for transactions
             user = await User.objects.create(
@@ -1220,9 +1198,8 @@ async def test_query_many_to_one(db):
 
     print(q)
 
-    r = await Job.objects.execute(q)
-    assert r.returns_rows
-
+    #r = await Job.objects.execute(q)
+    #assert r.returns_rows
     for row in await JobRole.objects.fetchall(q):
         #: TODO: combine the joins back up
         role = await JobRole.restore(row)
@@ -1234,7 +1211,7 @@ async def test_query_many_to_one(db):
         #    assert role.job == job
         loaded.append(job)
 
-    assert len(await Job.objects.fetchmany(q, size=2)) == 2
+    # assert len(await Job.objects.limit(2).fetchall(q)) == 2
 
     # Make sure they pull from cache
     roles = await JobRole.objects.all()
@@ -1280,6 +1257,21 @@ async def test_query_multiple_joins(db):
         roles__tasks__desc__notin=["Hire", "Fire"]
     )
     assert jobs == [cfo, swe]
+
+
+async def test_query_aggregate(db):
+    await reset_tables(Score)
+    await Score.objects.bulk_create([
+        Score(q1=1, q2=100),
+        Score(q1=2, q2=5),
+        Score(q1=3, q2=0,),
+    ])
+
+    assert await Score.objects.count() == 3
+    assert await Score.objects.max("q1") == 3
+    assert await Score.objects.min("q1") == 1
+    assert await Score.objects.sum("q2") == 105
+    assert await Score.objects.max("q1", "q2") == (3, 100)
 
 
 async def test_save_update_fields(db):
@@ -1340,7 +1332,7 @@ async def test_load_fields(db):
     assert page.title == "New title"
 
 
-async def test_save_errors(db):
+async def test_save_params_invalid(db, caplog):
     await reset_tables(User)
 
     u = User()
@@ -1348,9 +1340,15 @@ async def test_save_errors(db):
         # Cant do both
         await u.save(force_insert=True, force_update=True)
 
-    # Updating unsaved will not work
-    r = await u.save(force_update=True)
-    assert r.rowcount == 0
+
+async def test_save_did_not_update(db, caplog):
+    await reset_tables(User)
+    # Updating unsaved value not work
+    u = User()
+    await u.save(force_update=True)
+    assert caplog.messages
+    msg = caplog.messages[-1]
+    assert "Did not update" in msg
 
 
 async def test_object_caching(db):
