@@ -2,6 +2,7 @@ import gc
 import os
 import random
 import re
+import logging
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -29,6 +30,9 @@ if "DATABASE_URL" not in os.environ:
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
+IS_MYSQL = DATABASE_URL.startswith("mysql")
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
 try:
     import sqlalchemy as sa
 
@@ -40,16 +44,18 @@ try:
         SQLModelManager,
     )
 
-    if DATABASE_URL.startswith("mysql"):
+    if IS_MYSQL:
         from pymysql.err import IntegrityError
+    elif IS_SQLITE:
+        #logging.getLogger("aiosqlite").setLevel(logging.DEBUG)
+        logging.getLogger("aiosqlite.sa").setLevel(logging.DEBUG)
+        from aiosqlite import IntegrityError
     else:
         from psycopg2.errors import UniqueViolation as IntegrityError
 except ImportError as e:
-    pytest.skip(f"aiomysql and aiopg not available {e}", allow_module_level=True)
+    pytest.skip(f"aiomysql, aisosqlite, aiopg not available {e}", allow_module_level=True)
 
 faker = Faker()
-
-IS_MYSQL = DATABASE_URL.startswith("mysql")
 
 
 class AbstractUser(SQLModel):
@@ -352,7 +358,11 @@ async def reset_tables(*models):
             await Model.objects.drop_table()
         except Exception as e:
             msg = str(e)
-            if not ("Unknown table" in msg or "does not exist" in msg):
+            if not (
+                "Unknown table" in msg
+                or "does not exist" in msg
+                or "no such table" in msg
+            ):
                 raise  # Unexpected error
         await Model.objects.create_table()
 
@@ -379,8 +389,7 @@ async def db(event_loop):
         from aiopg.sa import create_engine
     elif schema == "sqlite":
         from aiosqlite import connect
-
-        create_engine = connect
+        from aiosqlite.sa import create_engine
     else:
         raise ValueError("Unsupported database schema: %s" % schema)
 
@@ -390,6 +399,7 @@ async def db(event_loop):
     params["loop"] = event_loop
 
     if schema == "sqlite":
+        params["isolation_level"] = None # autocommit
         if os.path.exists(db):
             os.remove(db)
     else:
@@ -406,6 +416,9 @@ async def db(event_loop):
         params["db"] = db
     elif schema == "postgres":
         params["database"] = db
+
+    if os.environ.get("ECHO", "").lower() == "true":
+        params["echo"] = True
 
     async with create_engine(**params) as engine:
         mgr = SQLModelManager.instance()
@@ -1433,39 +1446,4 @@ def test_abstract_tables():
     CustomUser3.objects
 
 
-@pytest.mark.benchmark(group="sql")
-def test_benchmark(db, event_loop, benchmark):
-    event_loop.run_until_complete(reset_tables(Image))
 
-    for i in range(1000):
-        event_loop.run_until_complete(
-            Image.objects.create(
-                name=f"Image {i}",
-                path=f"/media/some/path/{i}",
-                alpha=i % 255,
-                # size=(320, 240),
-                data=b"12345678",
-                metadata={"tag": "sunset"},
-            )
-        )
-
-    def run():
-        event_loop.run_until_complete(Image.objects.all())
-
-    benchmark(run)
-
-
-@pytest.mark.benchmark(group="sql-build-query")
-def test_benchmark_filter_related_query(db, benchmark):
-    def query():
-        Page.objects.filter(author__name="Tom", status="live")
-
-    benchmark(query)
-
-
-@pytest.mark.benchmark(group="sql-build-query")
-def test_benchmark_filter_query(db, benchmark):
-    def query():
-        Page.objects.filter(status="live")
-
-    benchmark(query)

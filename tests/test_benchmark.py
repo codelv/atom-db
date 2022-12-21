@@ -1,13 +1,13 @@
 from datetime import datetime
 
 import pytest
-from atom.api import Bool, Dict, Float, Int, List, Str, Typed
+from atom.api import Bool, Dict, Enum, Float, Int, List, Str, Typed
 
-from atomdb.base import Model
+from atomdb.base import Model, JSONModel
 
 NOW = datetime.now()
 
-state = dict(
+flat_state = dict(
     title="This is a test",
     desc="""Lorem ipsum dolor sit amet, consectetur adipiscing elit,
     sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
@@ -22,6 +22,25 @@ state = dict(
     tags=["electronics", "laptop"],
     meta={"views": 0},
 )
+
+nested_state = {
+    "__model__": "test_benchmark.Page",
+    "blocks": [
+        {"__model__": "test_benchmark.HeadingBlock", "text": "Main", "width": 0},
+        {
+            "__model__": "test_benchmark.MarkdownBlock",
+            "content": "![Home](/)",
+            "width": 0,
+        },
+    ],
+    "enabled": True,
+    "settings": {
+        "__model__": "test_benchmark.PageSettings",
+        "count": 100,
+        "meta": "Lorem ipsum dolor",
+    },
+    "title": "Hello world",
+}
 
 
 class Product(Model):
@@ -38,8 +57,32 @@ class Product(Model):
     )
 
 
+class Block(JSONModel):
+    width = Int()
+
+
+class HeadingBlock(Block):
+    text = Str()
+
+
+class MarkdownBlock(Block):
+    content = Str()
+
+
+class PageSettings(JSONModel):
+    meta = Str()
+    count = Int()
+
+
+class Page(JSONModel):
+    title = Str()
+    enabled = Bool()
+    blocks = List(Block)
+    settings = Typed(PageSettings, ())
+
+
 @pytest.mark.benchmark(group="base")
-def test_serialize(benchmark):
+def test_serialize_flat(benchmark):
     product = Product(
         title="This is a test",
         desc="""Lorem ipsum dolor sit amet, consectetur adipiscing elit,
@@ -59,8 +102,27 @@ def test_serialize(benchmark):
 
 
 @pytest.mark.benchmark(group="base")
-def test_restore(benchmark, event_loop):
+def test_restore_flat(benchmark, event_loop):
     def run():
-        event_loop.run_until_complete(Product.restore(state))
+        event_loop.run_until_complete(Product.restore(flat_state))
+
+    benchmark(run)
+
+
+@pytest.mark.benchmark(group="base")
+def test_serialize_nested(benchmark):
+    page = Page(
+        title="Hello world",
+        enabled=True,
+        blocks=[HeadingBlock(text="Main"), MarkdownBlock(content="![Home](/)")],
+        settings=PageSettings(meta="Lorem ipsum dolor", count=100),
+    )
+    benchmark(page.__getstate__)
+
+
+@pytest.mark.benchmark(group="base")
+def test_restore_nested(benchmark, event_loop):
+    def run():
+        event_loop.run_until_complete(Page.restore(nested_state))
 
     benchmark(run)
