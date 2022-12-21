@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="atom-db",
-    version="0.7.9",
+    version="0.7.10",
     author="CodeLV",
     author_email="frmdstryr@gmail.com",
     url="https://github.com/codelv/atom-db",
@@ -23,7 +23,7 @@ setup(
     long_description_content_type="text/markdown",
     requires=["atom"],
     python_requires=">=3.7",
-    install_requires=["atom>=0.7.0", "bytecode"],
+    install_requires=["atom>=0.7.0"],
     optional_requires=[
         "sqlalchemy",
         "aiomysql",

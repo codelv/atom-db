@@ -7,11 +7,9 @@ isort:
 typecheck:
 	mypy atomdb --ignore-missing-imports
 lintcheck:
-	flake8 --ignore=E501 atomdb
-	flake8 --ignore=E501 tests
+	flake8 --ignore=E501,W503  atomdb tests
 reformat:
-	black atomdb
-	black tests
+	black atomdb tests
 test:
 	pytest -v tests --cov atomdb --cov-report xml --asyncio-mode auto
 

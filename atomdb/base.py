@@ -42,7 +42,6 @@ from atom.api import (
     Value,
     set_default,
 )
-from bytecode import Bytecode, Instr
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -591,7 +590,9 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
 
 def generate_function(
-    source: str, namespace: DictType[str, Any], fn_name: str, optimize: bool = True
+    source: str,
+    namespace: DictType[str, Any],
+    fn_name: str,
 ) -> Callable[..., Any]:
     """Generate an optimized function
 
@@ -624,14 +625,6 @@ def generate_function(
 
     # Optimize global access
     fn = result[fn_name]
-    fn.__source__ = source
-    if optimize:
-        bc = Bytecode.from_code(fn.__code__)
-        for i, inst in enumerate(bc):
-            name = getattr(inst, "name", None)
-            if name == "LOAD_GLOBAL" and inst.arg in namespace:
-                bc[i] = Instr("LOAD_CONST", namespace[inst.arg])
-        fn.__code__ = bc.to_code()
     return fn
 
 
