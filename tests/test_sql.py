@@ -1,8 +1,8 @@
 import gc
+import logging
 import os
 import random
 import re
-import logging
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -47,13 +47,15 @@ try:
     if IS_MYSQL:
         from pymysql.err import IntegrityError
     elif IS_SQLITE:
-        #logging.getLogger("aiosqlite").setLevel(logging.DEBUG)
+        # logging.getLogger("aiosqlite").setLevel(logging.DEBUG)
         logging.getLogger("aiosqlite.sa").setLevel(logging.DEBUG)
         from aiosqlite import IntegrityError
     else:
         from psycopg2.errors import UniqueViolation as IntegrityError
 except ImportError as e:
-    pytest.skip(f"aiomysql, aisosqlite, aiopg not available {e}", allow_module_level=True)
+    pytest.skip(
+        f"aiomysql, aisosqlite, aiopg not available {e}", allow_module_level=True
+    )
 
 faker = Faker()
 
@@ -399,7 +401,7 @@ async def db(event_loop):
     params["loop"] = event_loop
 
     if schema == "sqlite":
-        params["isolation_level"] = None # autocommit
+        params["isolation_level"] = None  # autocommit
         if os.path.exists(db):
             os.remove(db)
     else:
@@ -1444,6 +1446,3 @@ def test_abstract_tables():
     # This is okay too
     CustomUser2.objects
     CustomUser3.objects
-
-
-

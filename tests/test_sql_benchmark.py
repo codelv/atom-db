@@ -1,6 +1,8 @@
 import pytest
+from test_sql import Image, Page, db, reset_tables
 
-from test_sql import Image, Page, reset_tables, db
+assert db  # fix flake8
+
 
 @pytest.mark.benchmark(group="sql-create")
 def test_benchmark_create(db, event_loop, benchmark):
@@ -47,7 +49,7 @@ def prepare_benchmark(event_loop, n: int):
 
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get(db, event_loop, benchmark):
-    """ Do a normal get query where the item is not in the cache """
+    """Do a normal get query where the item is not in the cache"""
     prepare_benchmark(event_loop, n=1)
     Image.objects.cache.clear()
 
@@ -60,8 +62,9 @@ def test_benchmark_get(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get_cached(db, event_loop, benchmark):
-    """ Do a normal get query where the item is in the cache """
+    """Do a normal get query where the item is in the cache"""
     images = prepare_benchmark(event_loop, n=1)
+    assert images
 
     async def task():
         image = await Image.objects.get(name="Image 0")
@@ -72,7 +75,7 @@ def test_benchmark_get_cached(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get_raw(db, event_loop, benchmark):
-    """ Do a prebuilt get query with restoring without cache """
+    """Do a prebuilt get query with restoring without cache"""
     prepare_benchmark(event_loop, n=1)
     q = Image.objects.filter(name="Image 0").query("select")
     Image.objects.cache.clear()
@@ -89,11 +92,10 @@ def test_benchmark_get_raw(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get_raw_str(db, event_loop, benchmark):
-    """ Do a prebuilt get query with restoring without cache """
+    """Do a prebuilt get query with restoring without cache"""
     images = prepare_benchmark(event_loop, n=1)
-    q = """SELECT "test_sql.Image"._id, "test_sql.Image".name, "test_sql.Image".path, "test_sql.Image".metadata, "test_sql.Image".alpha, "test_sql.Image".data, "test_sql.Image".info
-        FROM "test_sql.Image"
-        WHERE "test_sql.Image".name = %(name_1)s"""
+    assert images
+    q = str(Image.objects.filter(name="Image 0").query("select"))
 
     async def task():
         async with Image.objects.connection() as conn:
@@ -104,10 +106,12 @@ def test_benchmark_get_raw_str(db, event_loop, benchmark):
 
     benchmark(lambda: event_loop.run_until_complete(task()))
 
+
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get_raw_cached(db, event_loop, benchmark):
-    """ Do a prebuilt get query with restoring with cache """
+    """Do a prebuilt get query with restoring with cache"""
     images = prepare_benchmark(event_loop, n=1)
+    assert images
     q = Image.objects.filter(name="Image 0").query("select")
     # Image.objects.cache.clear()
 
@@ -123,7 +127,7 @@ def test_benchmark_get_raw_cached(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-get")
 def test_benchmark_get_raw_row(db, event_loop, benchmark):
-    """ Do a prebuilt get query without restoring """
+    """Do a prebuilt get query without restoring"""
     prepare_benchmark(event_loop, n=1)
     q = Image.objects.filter(name="Image 0").query("select")
 
@@ -139,7 +143,7 @@ def test_benchmark_get_raw_row(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-filter")
 def test_benchmark_filter(db, event_loop, benchmark):
-    """ Do a filter query where no items are in the cache """
+    """Do a filter query where no items are in the cache"""
     prepare_benchmark(event_loop, n=1000)
     Image.objects.cache.clear()
 
@@ -152,8 +156,9 @@ def test_benchmark_filter(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-filter")
 def test_benchmark_filter_cached(db, event_loop, benchmark):
-    """ Do a filter query where all items are in the cache """
+    """Do a filter query where all items are in the cache"""
     images = prepare_benchmark(event_loop, n=1000)
+    assert images
 
     async def task():
         results = await Image.objects.filter(alpha__ne=0)
@@ -164,7 +169,7 @@ def test_benchmark_filter_cached(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-filter")
 def test_benchmark_filter_raw(db, event_loop, benchmark):
-    """ Do a raw filter query where no items are in the cache """
+    """Do a raw filter query where no items are in the cache"""
     prepare_benchmark(event_loop, n=1000)
     Image.objects.cache.clear()
     q = Image.objects.filter(alpha__ne=0).query("select")
@@ -180,8 +185,9 @@ def test_benchmark_filter_raw(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-filter")
 def test_benchmark_filter_raw_cached(db, event_loop, benchmark):
-    """ Do a raw filter query where all items are in the cache """
+    """Do a raw filter query where all items are in the cache"""
     images = prepare_benchmark(event_loop, n=1000)
+    assert images
     # Image.objects.cache.clear()
     q = Image.objects.filter(alpha__ne=0).query("select")
 
@@ -196,7 +202,7 @@ def test_benchmark_filter_raw_cached(db, event_loop, benchmark):
 
 @pytest.mark.benchmark(group="sql-filter")
 def test_benchmark_filter_raw_row(db, event_loop, benchmark):
-    """ Do a raw filter query without restoring item from rows """
+    """Do a raw filter query without restoring item from rows"""
     prepare_benchmark(event_loop, n=1000)
     # Image.objects.cache.clear()
     q = Image.objects.filter(alpha__ne=0).query("select")

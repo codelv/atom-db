@@ -1,9 +1,9 @@
 from datetime import datetime
 
 import pytest
-from atom.api import Bool, Dict, Enum, Float, Int, List, Str, Typed
+from atom.api import Bool, Dict, Float, Int, List, Str, Typed
 
-from atomdb.base import Model, JSONModel
+from atomdb.base import JSONModel, Model
 
 NOW = datetime.now()
 
