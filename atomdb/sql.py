@@ -42,10 +42,12 @@ from atom.api import (
     Value,
 )
 from databases import Database
-from databases.interfaces import Record, ConnectionBackend as Connection
-from sqlalchemy.sql.type_api import TypeEngine
-from sqlalchemy.engine.interfaces import Dialect
+from databases.core import Connection
+from databases.interfaces import Record
 from sqlalchemy.engine import ddl
+from sqlalchemy.engine.interfaces import Dialect
+from sqlalchemy.engine.row import Row
+from sqlalchemy.sql.type_api import TypeEngine
 
 from .base import (
     JSONModel,
@@ -137,6 +139,7 @@ CONSTRAINT_NAMING_CONVENTIONS = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
 
 log = logging.getLogger("atomdb.sql")
 
@@ -605,7 +608,7 @@ class SQLModelSerializer(ModelSerializer):
         if "__model__" in state:
             return state  # Joined already
         q = ModelType.objects.query(None, _id=state["_id"])
-        return await ModelType.objects.fetchone(q)
+        return await ModelType.objects.fetch_one(q)
 
     def _default_registry(self):
         """Add all sql and json models to the registry"""
@@ -640,6 +643,11 @@ class SQLTableProxy(Atom, Generic[T]):
         model = self.model
         return mgr.database[model.__database__]
 
+    dialect = Instance(Dialect)
+
+    def _default_dialect(self):
+        return self.database._backend._dialect
+
     #: Model which owns the table
     model = ForwardSubclass(lambda: SQLModel)
 
@@ -652,7 +660,7 @@ class SQLTableProxy(Atom, Generic[T]):
     #: Key used to pass the force restore option
     restore_kwarg = Str("force_restore")
 
-    def connection(self, connection: Optional[Connection]=None) -> Connection:
+    def connection(self, connection: Optional[Connection] = None) -> ConnectionProxy:
         """Create a new connection or the return given connection as an async
         contextual object.
 
@@ -689,7 +697,9 @@ class SQLTableProxy(Atom, Generic[T]):
         async with self.connection(connection) as conn:
             return await conn.execute(*args, **kwargs)
 
-    async def fetchall(self, query: QueryType, connection: Optional[Connection]=None):
+    async def fetch_all(
+        self, query: QueryType, connection: Optional[Connection] = None
+    ):
         """Fetch all results for the query.
 
         Parameters
@@ -708,8 +718,12 @@ class SQLTableProxy(Atom, Generic[T]):
         async with self.connection(connection) as conn:
             return await conn.fetch_all(query)
 
-    async def fetchone(
-        self, query: QueryType, query_args: tuple = (), *, connection: Optional[Connection]=None
+    async def fetch_one(
+        self,
+        query: QueryType,
+        query_args: tuple = (),
+        *,
+        connection: Optional[Connection] = None,
     ) -> Optional[Record]:
         """Fetch a single result for the query.
 
@@ -728,8 +742,12 @@ class SQLTableProxy(Atom, Generic[T]):
         async with self.connection(connection) as conn:
             return await conn.fetch_one(query, *query_args)
 
-    async def scalar(
-        self, query: QueryType, query_args: tuple = (), *, connection: Optional[Connection]=None
+    async def fetch_val(
+        self,
+        query: QueryType,
+        query_args: tuple = (),
+        *,
+        connection: Optional[Connection] = None,
     ) -> Any:
         """Fetch the scalar result for the query.
 
@@ -795,7 +813,9 @@ class SQLTableProxy(Atom, Generic[T]):
         await obj.save(force_insert=True, connection=connection)
         return obj
 
-    async def bulk_create(self, items: Sequence[T], connection: Optional[Connection] = None) -> Sequence[T]:
+    async def bulk_create(
+        self, items: Sequence[T], connection: Optional[Connection] = None
+    ) -> Sequence[T]:
         """Perform a bulk create from a sequence of models. This will
         populate the primary key of the items as needed but will not pull
         any fields that have not been defined. The restored flag will still
@@ -818,24 +838,25 @@ class SQLTableProxy(Atom, Generic[T]):
         values = [item.__prepare_state_for_db__() for item in items]
         if not values:
             return items
-        async with self.connection(connection) as conn:
-            # TODO: Properly detect?
-            postgres = "postgres" in self.database.url.dialect
-            if postgres:
-                pk_column = table.c[self.model.__pk__]
-                q = table.insert().returning(pk_column).values(values)
-            else:
-                # TODO: Get return value?
-                q = table.insert().values(values)
+        dialect = self.database.url.dialect
+        if dialect == "postgres":
+            pk_column = table.c[self.model.__pk__]
+            q = table.insert().returning(pk_column).values(values)
+        else:
+            # TODO: Get return value?
+            q = table.insert().values(values)
 
-            result = await conn.fetch_all(q)
-            if postgres:
+        async with self.connection(connection) as conn:
+            if dialect == "postgres":
+                result = await conn.fetch_all(q)
                 cache = self.cache
                 for r, item in zip(result, items):
                     # Don't overwrite if force inserting
                     if not item._id:
                         item._id = r[0]
                     cache[item._id] = item
+            else:
+                result = await conn.execute(q)
             return items
 
     def __getattr__(self, name: str):
@@ -923,10 +944,10 @@ class SQLMeta(ModelMeta):
         if base_meta and getattr(base_meta, "abstract", None):
             if not Meta:
 
-                class Meta(base_meta):
+                class TableMeta(base_meta):  # type: ignore
                     abstract = False
 
-                cls.Meta = Meta
+                cls.Meta = TableMeta
             elif getattr(Meta, "abstract", None) is None:
                 Meta.abstract = False
 
@@ -980,7 +1001,7 @@ class SQLModelManager(ModelManager):
     cache = Bool(True)
 
     def create_metadata(self, db_name: str) -> sa.MetaData:
-        """ Create an sqlalchemy metadata for the given database name.
+        """Create an sqlalchemy metadata for the given database name.
         This is used so databases with different dialects can be supported.
 
         Parameters
@@ -998,7 +1019,7 @@ class SQLModelManager(ModelManager):
 
     def _default_metadata(self) -> DictType[str, sa.MetaData]:
         metadata = self.create_metadata("default")
-        return {"default":  metadata}
+        return {"default": metadata}
 
     def create_tables(self) -> DictType[Type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
@@ -1423,17 +1444,17 @@ class SQLQuerySet(Atom, Generic[T]):
             q = q.group_by(group_by)
         if distinct:
             q = q.distinct()
-        cursor = await self.proxy.fetchall(q, connection=self.connection)
+        results = await self.proxy.fetch_all(q, connection=self.connection)
         if flat:
-            return [row[0] for row in cursor]
-        return cursor
+            return [row[0] for row in results]
+        return results
 
     async def count(self, *args, **kwargs) -> int:
         if args or kwargs:
             return await self.filter(*args, **kwargs).count()
         subq = self.query("select").alias("subquery")
         q = sa.func.count().select().select_from(subq)
-        return await self.proxy.scalar(q, connection=self.connection)
+        return await self.proxy.fetch_val(q, connection=self.connection)
 
     def max(self, *columns):
         return self.aggregate(*columns, func=sa.func.max)
@@ -1453,16 +1474,16 @@ class SQLQuerySet(Atom, Generic[T]):
             columns.append(func(col) if func is not None else col)
         q = sa.select(columns)
         if len(columns) == 1:
-            return await self.proxy.scalar(q, connection=self.connection)
+            return await self.proxy.fetch_val(q, connection=self.connection)
         else:
-            r = await self.proxy.fetchone(q, connection=self.connection)
+            r = await self.proxy.fetch_one(q, connection=self.connection)
             return tuple(r._mapping.values())
 
     async def exists(self, *args, **kwargs) -> bool:
         if args or kwargs:
             return await self.filter(*args, **kwargs).exists()
         q = sa.exists(self.query("select")).select()
-        return await self.proxy.scalar(q, connection=self.connection)
+        return await self.proxy.fetch_val(q, connection=self.connection)
 
     async def delete(self, *args, **kwargs):
         if args or kwargs:
@@ -1500,10 +1521,11 @@ class SQLQuerySet(Atom, Generic[T]):
         cache = await self.prefetch()
         q = self.query("select")
         restore = self.proxy.model.restore
-        cursor = await self.proxy.fetchall(q, connection=self.connection)
+        results = await self.proxy.fetch_all(q, connection=self.connection)
         force = self.force_restore
         return [
-            cast(T, await restore(row, force=force, prefetched=cache)) for row in cursor
+            cast(T, await restore(row, force=force, prefetched=cache))
+            for row in results
         ]
 
     async def get(self, *args, **kwargs) -> Optional[T]:
@@ -1521,11 +1543,12 @@ class SQLQuerySet(Atom, Generic[T]):
         if args or kwargs:
             return await self.filter(*args, **kwargs).get()
         q = self.query("select")
-        row = await self.proxy.fetchone(q, connection=self.connection)
+        proxy = self.proxy
+        row = await proxy.fetch_one(q, connection=self.connection)
         if row is None:
             return None
         cache = await self.prefetch()
-        model = self.proxy.model
+        model = proxy.model
         force = self.force_restore
         return cast(T, await model.restore(row, force=force, prefetched=cache))
 
@@ -1638,7 +1661,7 @@ class SQLBinding(Atom):
 
     async def wait(self) -> list:
         results = []
-        await self.database.connect() # Make sure connected
+        await self.database.connect()  # Make sure connected
         async with self.database.connection() as conn:
             try:
                 while self.queue:
@@ -1784,7 +1807,11 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
                     obj = f"await get_cached_model(rel_model_{f}, v, state)"
 
                 # Only convert if the object has not already been restored
-                expr = "\n            ".join(
+                if on_error == "raise":
+                    indent = "\n        "
+                else:
+                    indent = "\n            "
+                expr = indent.join(
                     [
                         f"if isinstance(v, rel_model_{f}):",
                         f"    self.{f} = v",
@@ -1899,6 +1926,14 @@ class SQLModel(Model, metaclass=SQLMeta):
             The restored or cached model.
 
         """
+        # Ensure state keys map to the column names
+        db = cls.objects
+
+        if isinstance(state, Row):
+            # Convert sq Row to dict since restore requires keys
+            # to map to the columns
+            state = dict(state)
+
         if cls.__joined_pk__ in state:
             # When sqlalchemy does a join the key will have a prefix
             # of the database name
@@ -1907,7 +1942,7 @@ class SQLModel(Model, metaclass=SQLMeta):
             pk = state[cls.__pk__]
 
         # Note make sure this always occurs to force table creation
-        cache = cls.objects.cache
+        cache = db.cache
         if pk is not None:
             # Check if this is in the cache
             obj = cache.get(pk)
@@ -1925,7 +1960,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         else:
             # Check the default for force reloading
             if force is None:
-                force = not cls.objects.table.bind.manager.cache
+                force = not db.table.bind.manager.cache
 
             # Note that if force is false and the object was restored
             # (ie from another query) the object in the cache is reused
@@ -1938,7 +1973,8 @@ class SQLModel(Model, metaclass=SQLMeta):
             if prefetched is not None:
                 prefetched_state = prefetched.get(pk)
                 if prefetched_state is not None:
-                    state = dict(state)  # Convert row proxy
+                    if not isinstance(state, dict):
+                        state = dict(state)  # Convert row proxy
                     state.update(prefetched_state)
 
             # This ideally should only be done if created
@@ -1978,7 +2014,11 @@ class SQLModel(Model, metaclass=SQLMeta):
         else:
             q = t.select()
         q = q.where(t.c[self.__pk__] == self._id)
-        state = await db.fetchone(q, connection=connection)
+        state = await db.fetch_one(q, connection=connection)
+        if isinstance(state, Row):
+            # Convert sq Row to dict since restore requires keys
+            # to map to the columns
+            state = dict(state)
         await self.__restorestate__(state)
 
     def __prepare_state_for_db__(self):

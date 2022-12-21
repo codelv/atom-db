@@ -82,8 +82,7 @@ def test_benchmark_get_raw(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
-            row = await cursor.fetchone()
+            row = await conn.fetch_one(q)
             image = await Image.restore(row)
             assert image.name == "Image 0"
 
@@ -95,12 +94,18 @@ def test_benchmark_get_raw_str(db, event_loop, benchmark):
     """Do a prebuilt get query with restoring without cache"""
     images = prepare_benchmark(event_loop, n=1)
     assert images
-    q = str(Image.objects.filter(name="Image 0").query("select"))
+
+    query = Image.objects.filter(name="Image 0").query("select")
+    q = str(
+        query.compile(
+            dialect=Image.objects.dialect, compile_kwargs={"literal_binds": True}
+        )
+    )
+    print(q)
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q, {"name_1": "Image 0"})
-            row = await cursor.fetchone()
+            row = await conn.fetch_one(q)
             image = await Image.restore(row)
             assert image.name == "Image 0"
 
@@ -117,8 +122,7 @@ def test_benchmark_get_raw_cached(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
-            row = await cursor.fetchone()
+            row = await conn.fetch_one(q)
             image = await Image.restore(row)
             assert image.name == "Image 0"
 
@@ -133,8 +137,7 @@ def test_benchmark_get_raw_row(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
-            row = await cursor.fetchone()
+            row = await conn.fetch_one(q)
             assert row["name"] == "Image 0"
             # No restore
 
@@ -176,8 +179,7 @@ def test_benchmark_filter_raw(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
-            results = [await Image.restore(row) for row in await cursor.fetchall()]
+            results = [await Image.restore(row) for row in await conn.fetch_all(q)]
             assert len(results) == 996
 
     benchmark(lambda: event_loop.run_until_complete(task()))
@@ -193,8 +195,7 @@ def test_benchmark_filter_raw_cached(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
-            results = [await Image.restore(row) for row in await cursor.fetchall()]
+            results = [await Image.restore(row) for row in await conn.fetch_all(q)]
             assert len(results) == 996
 
     benchmark(lambda: event_loop.run_until_complete(task()))
@@ -209,9 +210,8 @@ def test_benchmark_filter_raw_row(db, event_loop, benchmark):
 
     async def task():
         async with Image.objects.connection() as conn:
-            cursor = await conn.execute(q)
             # No restore
-            results = [row for row in await cursor.fetchall()]
+            results = await conn.fetch_all(q)
             assert len(results) == 996
 
     benchmark(lambda: event_loop.run_until_complete(task()))

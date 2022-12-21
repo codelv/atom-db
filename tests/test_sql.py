@@ -1,5 +1,4 @@
 import gc
-import logging
 import os
 import random
 from datetime import date, datetime, time, timedelta
@@ -31,31 +30,32 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 IS_MYSQL = DATABASE_URL.startswith("mysql")
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
+IS_POSTGRES = DATABASE_URL.startswith("postgres")
 
 try:
-    # logging.getLogger("databases").setLevel(logging.DEBUG)
-
     from databases import Database
-    import sqlalchemy as sa
-
-    from atomdb.sql import (
-        JSONModel,
-        RelatedInstance,
-        Relation,
-        SQLModel,
-        SQLModelManager,
-    )
-
-    if IS_MYSQL:
-        from pymysql.err import IntegrityError
-    elif IS_SQLITE:
-        from aiosqlite import IntegrityError
-    else:
-        from asyncpg.exceptions import UniqueViolationError as IntegrityError
 except ImportError as e:
-     pytest.skip(
-         f"databases with at least one backend is not available: {e}", allow_module_level=True
+    pytest.skip(
+        f"databases with at least one backend is not available: {e}",
+        allow_module_level=True,
     )
+
+import sqlalchemy as sa  # noqa: E402
+
+from atomdb.sql import (  # noqa: E402
+    JSONModel,
+    RelatedInstance,
+    Relation,
+    SQLModel,
+    SQLModelManager,
+)
+
+if IS_MYSQL:
+    from pymysql.err import IntegrityError
+elif IS_SQLITE:
+    from aiosqlite import IntegrityError
+else:
+    from asyncpg.exceptions import UniqueViolationError as IntegrityError
 
 faker = Faker()
 
@@ -164,6 +164,7 @@ class BigInt(Int):
 
 
 class Page(SQLModel):
+    __on_error__ = "raise"
     title = Str().tag(length=60)
     status = Enum("preview", "live")
     body = Str().tag(type=sa.UnicodeText())
@@ -244,7 +245,6 @@ class Project(SQLModel):
 class Score(SQLModel):
     q1 = Float()
     q2 = Float()
-
 
 
 def test_build_tables():
@@ -377,14 +377,13 @@ async def reset_tables(*models):
 
 async def create_database(DATABASE_URL):
     database = Database(DATABASE_URL)
-    scheme = database.url.scheme
+    dialect = database.url.dialect
     name = database.url.database
-    if scheme == "sqlite":
-        # params["isolation_level"] = None  # autocommit
+    if dialect == "sqlite":
         if os.path.exists(name):
             os.remove(name)
     else:
-        if scheme == "postgres":
+        if dialect == "postgres":
             database = Database(database.url.replace(database="postgres"))
         async with database:
             async with database.connection() as c:
@@ -392,8 +391,10 @@ async def create_database(DATABASE_URL):
                 await c.execute("DROP DATABASE IF EXISTS %s;" % name)
                 await c.execute("CREATE DATABASE %s;" % name)
 
+
 # TODO: Why does it need to be global???
 database = Database(DATABASE_URL)
+
 
 @pytest.fixture
 async def db(event_loop):
@@ -882,7 +883,7 @@ async def test_query_values(db):
     assert [v["name"] for v in vals] == ["Bob", "Jack"]
 
     vals = await User.objects.values("name", "age")
-    assert [tuple(v.values()) for v in vals] == [("Bob", 40), ("Jack", 30), ("Bob", 20)]
+    assert [(v[0], v[1]) for v in vals] == [("Bob", 40), ("Jack", 30), ("Bob", 20)]
 
     assert await User.objects.order_by("age").values("age", flat=True) == [20, 30, 40]
 
@@ -893,7 +894,7 @@ async def test_query_values(db):
         await User.objects.values("name", "age", flat=True)
 
 
-@pytest.mark.skipif(IS_MYSQL, reason="Distinct and count doesn't work")
+@pytest.mark.skipif(IS_MYSQL or IS_SQLITE, reason="Distinct and count doesn't work")
 async def test_query_distinct(db):
     await reset_tables(User)
     # Create second user
@@ -958,11 +959,13 @@ async def test_create(db):
 async def test_bulk_create(db):
     await reset_tables(User)
     assert await User.objects.count() == 0
-    # TODO: Get the id's of the rows inserted?
     users = await User.objects.bulk_create([User(name=f"user-{i}") for i in range(10)])
-    for u in users:
-        if not IS_MYSQL:
+
+    if IS_POSTGRES:
+        for u in users:
             assert u._id
+    else:
+        pass  # TODO: Get the id's of the rows inserted?
     assert await User.objects.count() == 10
 
 
@@ -1166,12 +1169,12 @@ async def test_column_rename(db):
     # Check without use labels
     table = Email.objects.table
     q = table.select().where(table.c.to == e.to)
-    row = await Email.objects.fetchone(q)
+    row = await Email.objects.fetch_one(q)
     assert row["from"] == e.from_, "Column rename failed"
 
     # Check with use labels
     q = table.select(use_labels=True).where(table.c.to == e.to)
-    row = await Email.objects.fetchone(q)
+    row = await Email.objects.fetch_one(q)
     assert row[f"{table.name}_from"] == e.from_, "Column rename failed"
 
     # Restoring a renamed column needs to work
@@ -1198,9 +1201,9 @@ async def test_query_many_to_one(db):
 
     print(q)
 
-    #r = await Job.objects.execute(q)
-    #assert r.returns_rows
-    for row in await JobRole.objects.fetchall(q):
+    # r = await Job.objects.execute(q)
+    # assert r.returns_rows
+    for row in await JobRole.objects.fetch_all(q):
         #: TODO: combine the joins back up
         role = await JobRole.restore(row)
 
@@ -1210,8 +1213,6 @@ async def test_query_many_to_one(db):
         # for role in job.roles:
         #    assert role.job == job
         loaded.append(job)
-
-    # assert len(await Job.objects.limit(2).fetchall(q)) == 2
 
     # Make sure they pull from cache
     roles = await JobRole.objects.all()
@@ -1261,11 +1262,16 @@ async def test_query_multiple_joins(db):
 
 async def test_query_aggregate(db):
     await reset_tables(Score)
-    await Score.objects.bulk_create([
-        Score(q1=1, q2=100),
-        Score(q1=2, q2=5),
-        Score(q1=3, q2=0,),
-    ])
+    await Score.objects.bulk_create(
+        [
+            Score(q1=1, q2=100),
+            Score(q1=2, q2=5),
+            Score(
+                q1=3,
+                q2=0,
+            ),
+        ]
+    )
 
     assert await Score.objects.count() == 3
     assert await Score.objects.max("q1") == 3

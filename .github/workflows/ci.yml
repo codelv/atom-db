@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U aiopg sqlalchemy codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
+        run: pip install -U databases[asyncpg] codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
@@ -68,7 +68,29 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U aiomysql 'sqlalchemy<1.4' codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
+        run: pip install -U databases[aiomysql] codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
+      - name: Install atom-db
+        run: pip install -e ./
+      - name: Run tests
+        run: pytest -v tests --cov atomdb --cov-report xml --asyncio-mode auto
+      - name: Coverage
+        run: codecov
+  test-sqlite:
+    runs-on: ubuntu-latest
+    env:
+        DATABASE_URL: 'sqlite:///test.db'
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup python ${{ matrix.python-version}}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: pip install -U databases[aiosqlite] codecov pytest pytest-benchmark pytest-cov pytest-asyncio faker
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
@@ -115,7 +137,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U motor aiopg aiomysql sqlalchemy mypy black isort flake8
+        run: pip install -U motor aiopg aiomysql aiosqlite sqlalchemy mypy black isort flake8
       - name: Run checks
         run: |
             isort atomdb tests --check --diff

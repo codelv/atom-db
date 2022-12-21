@@ -5,7 +5,7 @@ isort:
 	isort atomdb
 	isort tests
 typecheck:
-	mypy atomdb --ignore-missing-imports
+	mypy atomdb --ignore-missing-imports --check-untyped-defs
 lintcheck:
 	flake8 --ignore=E501,W503  atomdb tests
 reformat:

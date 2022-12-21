@@ -1,3 +1,42 @@
+# 0.8.0
+
+The sql backend was changed to use [databases](https://github.com/encode/databases) to
+to abstract out / simplify database access. So atomdb now supports sqlite!
+
+
+### Breaking changes
+However this causes several breaking changes.
+
+- The following functions were renamed for consistency with the databases
+lib's connection interface:
+    - `fetchone` to `fetch_one`
+    - `fetchall` to `fetch_all`
+    - `scalar` to `fetch_val`
+
+- The function `fetchmany` was removed. Use a query limit instead.
+- The `execute` function now returns the last row inserted NOT a cursor,
+so use `fetch_one`, `fetch_all` and `fetch_val` depending on the desired
+result from the query.
+- The `values` function now returns `sqlachemy.engine.row.Row` instances
+instead of a tuple. Key and index access still works as before but conversion
+to a tuple is done with `tuple(row._mapping.values())`.
+- Transactions are now started using `conn.transaction()` instead of `conn.begin()`
+
+The `SQLManager.database` now takes a dict of `Database` entries. For example
+
+```python
+from databases import Database
+mgr = SQLManager.instance()
+mgr.database = {'default': Database(DATABASE_URL)}
+```
+
+### Features / fixes
+
+- Fixed bug with aggregate average
+- Support connecting to multiple databases types (eg postgres and mysql).
+ Previously a single sqlachemy MetaData was used.
+
+
 # 0.7.10
 
 - Don't rewrite bytecode
