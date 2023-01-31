@@ -1,7 +1,40 @@
 import pytest
 from test_sql import Image, Page, db, reset_tables
 
+try:
+    from databases.core import Compiled  # noqa: F401
+
+    DATABASES_SUPPORTS_COMPILED = True
+except ImportError:
+    DATABASES_SUPPORTS_COMPILED = False
+
+
 assert db  # fix flake8
+
+
+@pytest.mark.benchmark(group="restore")
+@pytest.mark.parametrize("generated", ("gen", "atom"))
+def test_restore(benchmark, event_loop, generated):
+    image_state = {
+        "_id": 1,
+        "name": "Image 1",
+        "path": "/media/some/path/1",
+        "data": b"12345678",
+        "metadata": {"tag": "sunset"},
+    }
+
+    if generated == "gen":
+        ImageModel = Image
+    else:
+
+        class ImageModel(Image):
+            async def __restorestate__(self, state, scope=None):
+                self.__setstate__(state)
+
+    def run():
+        event_loop.run_until_complete(ImageModel.restore(image_state))
+
+    benchmark(run)
 
 
 @pytest.mark.benchmark(group="sql-create")
@@ -134,6 +167,22 @@ def test_benchmark_get_raw_row(db, event_loop, benchmark):
     """Do a prebuilt get query without restoring"""
     prepare_benchmark(event_loop, n=1)
     q = Image.objects.filter(name="Image 0").query("select")
+
+    async def task():
+        async with Image.objects.connection() as conn:
+            row = await conn.fetch_one(q)
+            assert row["name"] == "Image 0"
+            # No restore
+
+    benchmark(lambda: event_loop.run_until_complete(task()))
+
+
+@pytest.mark.skipif(not DATABASES_SUPPORTS_COMPILED, reason="Compiled not supported")
+@pytest.mark.benchmark(group="sql-get")
+def test_benchmark_get_compiled(db, event_loop, benchmark):
+    """Do a prebuilt get query without restoring"""
+    prepare_benchmark(event_loop, n=1)
+    q = Image.objects.filter(name="Image 0").query("select").compile()
 
     async def task():
         async with Image.objects.connection() as conn:

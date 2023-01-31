@@ -45,6 +45,7 @@ import sqlalchemy as sa  # noqa: E402
 from atomdb.sql import (  # noqa: E402
     JSONModel,
     RelatedInstance,
+    RelatedList,
     Relation,
     SQLModel,
     SQLModelManager,
@@ -209,6 +210,16 @@ class Email(SQLModel):
     from_ = Str().tag(name="from").tag(length=120)
     body = Str().tag(length=1024)
     attachments = Relation(lambda: Attachment)
+    tags = Relation(lambda: Tag, through=lambda: EmailTag)
+
+
+class Tag(SQLModel):
+    name = Str().tag(length=100)
+
+
+class EmailTag(SQLModel):
+    tag = Instance(Tag).tag(nullable=False)
+    email = Instance(Email).tag(nullable=False)
 
 
 class Attachment(SQLModel):
@@ -1383,6 +1394,64 @@ async def test_fk_custom_type(db):
     await Project.objects.create(doc=doc)
     col = Project.objects.table.columns["doc"]
     assert isinstance(col.type, sa.String)
+
+
+async def test_relation_many_to_one_save(db):
+    await reset_tables(Email, Attachment)
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+    )
+    email.attachments = [
+        Attachment(email=email, name="test.pdf"),
+        Attachment(email=email, name="funny.jpg"),
+    ]
+    await email.attachments.save()
+    assert (await Attachment.objects.filter(email=email).count()) == 2
+
+    email.attachments.pop()
+    await email.attachments.save()
+    assert (await Attachment.objects.filter(email=email).count()) == 1
+
+    # Check RelatedList
+    # Check iter
+    assert [a.email is email for a in email.attachments]
+    # Check getitem
+    assert email.attachments[0].name == "test.pdf"
+    assert len(email.attachments) == 1
+
+    a = email.attachments[0]
+    assert a in email.attachments
+
+    email.attachments.insert(0, Attachment(email=email, name="new.docx"))
+    await email.attachments.save()
+    assert (await Attachment.objects.filter(email=email).count()) == 2
+
+    attachments = email.attachments[-1:]
+    assert isinstance(attachments, RelatedList)
+    await attachments.save()
+    assert (await Attachment.objects.filter(email=email).count()) == 1
+
+
+async def test_relation_many_to_many_save(db):
+    await reset_tables(Email, Tag, EmailTag)
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+    )
+    inbox = await Tag.objects.create(name="Inbox")
+    starred = await Tag.objects.create(name="Starred")
+    draft = await Tag.objects.create(name="Draft")
+
+    email.tags = [inbox, starred]
+    await email.tags.save()
+    assert (await EmailTag.objects.count()) == 2
+    email.tags = [inbox]
+    await email.tags.save()
+    assert (await EmailTag.objects.count()) == 1
+    email.tags = [starred, draft]
+    await email.tags.save()
+    assert (await EmailTag.objects.count()) == 2
 
 
 def test_invalid_meta_field():

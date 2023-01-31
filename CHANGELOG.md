@@ -35,6 +35,7 @@ mgr.database = {'default': Database(DATABASE_URL)}
 - Fixed bug with aggregate average
 - Support connecting to multiple databases types (eg postgres and mysql).
  Previously a single sqlachemy MetaData was used.
+- The `Relation` member now returns a `RelationList` with `save` and `load` methods
 
 
 # 0.7.10
