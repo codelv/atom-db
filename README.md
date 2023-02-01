@@ -22,9 +22,6 @@ but has been pulled out to a separate package.
 - Works with alembic database migrations
 - Supports MongoDB using motor
 
-It's still in development....
-
-
 ### Structure
 
 The design is based somewhat on django.

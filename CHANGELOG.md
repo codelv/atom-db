@@ -1,6 +1,7 @@
 # 0.7.10
 
 - Don't rewrite bytecode
+- Make `Relation` return a RelatedList with `save` and `load` methods.
 
 # 0.7.9
 
