@@ -57,6 +57,7 @@ from .base import (
     RestoreStateFn,
     ScopeType,
     StateType,
+    UnresolvableError,
     find_subclasses,
     generate_function,
     is_db_field,
@@ -234,8 +235,19 @@ class RelatedList(Atom):
             #          "topping").filter(pizza=pizza)
             #   ]
             #
-            relation_backref = resolve_backref(relation.to, ThroughModel)
+            RelModel = relation.to
+            relation_backref = resolve_backref(RelModel, ThroughModel)
+            if relation_backref is None:
+                raise UnresolvableError(
+                    f"relation between {RelModel} and through model {ThroughModel}"
+                    f": Tried {RelModel.__backrefs__}"
+                )
             owner_backref = resolve_backref(Model, ThroughModel)
+            if owner_backref is None:
+                raise UnresolvableError(
+                    f"relation between {Model} and through model {ThroughModel}"
+                    f": Tried {Model.__backrefs__}"
+                )
             return [
                 getattr(row, relation_backref.name)
                 for row in await ThroughModel.objects.select_related(
@@ -256,6 +268,11 @@ class RelatedList(Atom):
         #   comments = await Comments.objects.filter(page=page)
         RelModel = relation.to
         owner_backref = resolve_backref(Model, RelModel)
+        if owner_backref is None:
+            raise UnresolvableError(
+                f"relation between {Model} and {RelModel}"
+                f": Tried {Model.__backrefs__}"
+            )
         return await RelModel.objects.filter(**{owner_backref.name: owner})
 
     async def save(self, connection=None):
@@ -470,6 +487,7 @@ def resolve_member_column(
 @functools.lru_cache(1024)
 def resolve_backref(model: Type["SQLModel"], through: Type["SQLModel"]) -> Member:
     """Find the member on the through model that refers to the given model."""
+    assert model.objects and through.objects  # Force creation
     for other_model, referring_member in model.__backrefs__:
         if other_model is through:
             return referring_member
@@ -510,6 +528,8 @@ def resolve_relation(
             RelModel = types[0]
 
     if RelModel is not None:
+        assert model.objects and RelModel.objects  # Force creation
+
         m = cast(Member, relation)
         # Find the referring member
         # TODO: This does not support multiple backrefs
