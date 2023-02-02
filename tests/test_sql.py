@@ -382,7 +382,6 @@ async def reset_tables(*models):
 
 @pytest.fixture
 async def db(event_loop):
-
     if DATABASE_URL.startswith("sqlite"):
         m = re.match(r"(.+)://(.+)", DATABASE_URL)
         assert m, "DATABASE_URL is an invalid format"

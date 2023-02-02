@@ -2207,7 +2207,6 @@ class SQLModel(Model, metaclass=SQLMeta):
         state = self.__prepare_state_for_db__()
         async with db.connection(connection) as conn:
             if force_update or (self._id and not force_insert):
-
                 # If update fields was given, only pass those
                 if update_fields is not None:
                     # Replace any update fields with the appropriate name
