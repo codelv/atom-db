@@ -2,6 +2,7 @@
 
 - Don't rewrite bytecode
 - Make `Relation` return a RelatedList with `save` and `load` methods.
+- Pass onclause when using join to prevent sqlalchemy from picking incorrect relation
 
 # 0.7.9
 

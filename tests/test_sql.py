@@ -36,15 +36,6 @@ IS_SQLITE = DATABASE_URL.startswith("sqlite")
 try:
     import sqlalchemy as sa
 
-    from atomdb.sql import (
-        JSONModel,
-        RelatedInstance,
-        RelatedList,
-        Relation,
-        SQLModel,
-        SQLModelManager,
-    )
-
     if IS_MYSQL:
         from pymysql.err import IntegrityError
     elif IS_SQLITE:
@@ -57,6 +48,15 @@ except ImportError as e:
     pytest.skip(
         f"aiomysql, aisosqlite, aiopg not available {e}", allow_module_level=True
     )
+
+from atomdb.sql import (  # noqa: E402
+    JSONModel,
+    RelatedInstance,
+    RelatedList,
+    Relation,
+    SQLModel,
+    SQLModelManager,
+)
 
 faker = Faker()
 
@@ -80,6 +80,7 @@ class User(AbstractUser):
 
 class Job(SQLModel):
     name = Str().tag(length=64, unique=True)
+    enabled = Bool(True)
     roles = Relation(lambda: JobRole)
     duration = Instance(timedelta)
 
@@ -759,6 +760,37 @@ async def test_query_select_related_multiple(db):
     assert roles[1].skill.name == "Excel"
 
 
+async def test_query_select_related_filter(db):
+    await reset_tables(Job, JobSkill, JobRole)
+    await JobRole.objects.create(
+        job=await Job.objects.create(name="Manager"),
+        skill=await JobSkill.objects.create(name="Excel"),
+        name="Sr Manager",
+    )
+    dev = await Job.objects.create(name="Dev")
+    await JobRole.objects.create(
+        job=dev,
+        skill=await JobSkill.objects.create(name="C++"),
+        name="Sr Dev",
+    )
+    await JobRole.objects.create(
+        job=dev,
+        skill=await JobSkill.objects.create(name="Python"),
+        name="Jr Dev",
+    )
+    del dev
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+    JobSkill.objects.cache.clear()
+
+    r = await JobRole.objects.select_related("job", "skill").get(
+        job__enabled=True, skill__name__startswith="C"
+    )
+    assert r.name == "Sr Dev"
+    assert r.job.name == "Dev"
+    assert r.skill.name == "C++"
+
+
 async def test_query_prefetch_related_invalid(db):
     await reset_tables(Email, Attachment)
     with pytest.raises(ValueError):
@@ -1404,6 +1436,14 @@ async def test_relation_many_to_one_save(db):
     await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 2
 
+    all_attachments = email.attachments + [
+        Attachment(email=email, name="new.jpg"),
+    ]
+    email.attachments = list(all_attachments)
+    await email.attachments.save()
+    assert (await Attachment.objects.filter(email=email).count()) == 3
+
+    email.attachments.pop()
     email.attachments.pop()
     await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 1

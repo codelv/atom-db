@@ -12,6 +12,7 @@ import datetime
 import functools
 import logging
 import weakref
+from collections.abc import MutableSequence
 from decimal import Decimal
 from typing import Any
 from typing import Callable as CallableType
@@ -164,19 +165,15 @@ def find_sql_models() -> Iterator[Type["SQLModel"]]:
         yield model
 
 
-class RelatedList(Atom):
+class RelatedList(MutableSequence):
     """A proxy to the internal list which has methods to query a foreign key
     one to many or many to many relation
     """
 
-    #: The owner of the relation
-    owner = ForwardInstance(lambda: SQLModel)
-
-    #: List of related values
-    values = Value()
-
-    #: The relation member
-    relation = ForwardInstance(lambda: Relation)
+    def __init__(self, *, values, owner, relation):
+        self.values = values
+        self.owner = owner
+        self.relation = relation
 
     def __getitem__(self, key):
         if isinstance(key, slice):
@@ -199,12 +196,19 @@ class RelatedList(Atom):
     def __len__(self):
         return self.values.__len__()
 
-    def __getattr__(self, name):
-        return getattr(self.values, name)
+    def __add__(self, other):
+        return RelatedList(
+            values=self.values + other,
+            owner=self.owner,
+            relation=self.relation,
+        )
+
+    def insert(self, i, v):
+        self.values.insert(i, v)
 
     def copy(self):
         return RelatedList(
-            value=self.values.copy(),
+            values=self.values.copy(),
             owner=self.owner,
             relation=self.relation,
         )
@@ -1143,24 +1147,46 @@ class SQLQuerySet(Atom, Generic[T]):
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
         from_table = p.table
-        tables = [from_table]
-        model = p.model
+        tables = {from_table}
         use_labels = bool(self.related_clauses)
         outer_join = self.outer_join
         for clause in self.related_clauses:
-            rel_model = model
+            model = p.model
+            table = p.table
 
             # Walk the fk relations
             for part in clause.split("__"):
-                m = rel_model.members().get(part)
-                assert m is not None, f"{rel_model} has no field {part}"
+                m = model.members().get(part)
+                assert m is not None, f"{model} has no field {part}"
+
                 rel_model_types = resolve_member_types(m)
                 assert rel_model_types is not None
                 rel_model = rel_model_types[0]
                 assert issubclass(rel_model, Model)
-                table = rel_model.objects.table
-                from_table = from_table.join(table, isouter=outer_join)
-                tables.append(table)
+                rel_table = rel_model.objects.table
+
+                # For example:
+                # class Job(SQLModel):
+                #    status = Str()
+                #    roles = Relation(Role)
+                # class Role(SQLModel):
+                #    name = Str()
+                #    job = Instance(Job)
+                if isinstance(m, Relation):
+                    # Case when looking though the relation
+                    # r = await Job.objects.filter(roles__name="foo")
+                    backref = resolve_backref(model, m.through or rel_model)
+                    onclause = rel_table.c[backref.name] == table.c[model.__pk__]
+                else:
+                    # Normal foreign key cases or select related
+                    # r = await JobRole.objects.filter(job__status="live")
+                    onclause = rel_table.c[rel_model.__pk__] == table.c[m.name]
+                from_table = from_table.join(
+                    rel_table, onclause=onclause, isouter=outer_join
+                )
+                tables.add(rel_table)
+                model = rel_model
+                table = rel_table
 
         if query_type == "select":
             q = sa.select(columns or tables, use_labels=use_labels).select_from(
