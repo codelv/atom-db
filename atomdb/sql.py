@@ -42,6 +42,7 @@ from atom.api import (
     Set,
     Str,
     Typed,
+    Validate,
     Value,
 )
 from sqlalchemy.engine import ddl
@@ -85,6 +86,23 @@ COLUMN_KWARGS = (
     "comment",
 )
 FK_TYPES = (Instance, Typed, ForwardInstance, ForwardTyped)
+
+# Member types that will default to nullable=False unless tagged otherwise
+NON_NULL_MEMBERS = (
+    api.Bool,
+    api.Dict,
+    api.Str,
+    api.Int,
+    api.Float,
+    api.Range,
+    api.Enum,
+    api.FloatRange,
+    api.List,
+    api.ContainerList,
+    api.Tuple,
+    api.Set,
+    api.Bytes,
+)
 
 # kwargs reserved for the serializer
 SERIALIZE_KWARGS = ("flatten", "unflatten")
@@ -596,15 +614,15 @@ def atom_member_to_sql_column(
         if value_type is None:
             raise TypeError("Relation members must specify types")
         return None  # Relations are just syntactic sugar
-    elif isinstance(member, (api.List, api.ContainerList, api.Tuple)):
+    elif isinstance(member, (api.List, api.ContainerList, api.Tuple, api.Set)):
         item_type = member.validate_mode[-1]
         if item_type is None:
-            raise TypeError("List and Tuple members must specify types")
+            raise TypeError("List, Set, and Tuple members must specify types")
 
         # Resolve the item type
         value_type = resolve_member_types(item_type)
         if value_type is None:
-            raise TypeError("List and Tuple members must specify types")
+            raise TypeError("List, Set, and Tuple members must specify types")
         if issubclass(value_type[0], JSONModel):
             return sa.JSON(**kwargs)
         t = py_type_to_sql_column(model, member, value_type, **kwargs)
@@ -666,6 +684,21 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
         if k in metadata:
             kwargs[k] = metadata.pop(k)
 
+    # Set default nullable value
+    if "nullable" not in kwargs:
+        if "primary_key" in kwargs:
+            kwargs["nullable"] = False
+        elif isinstance(member, NON_NULL_MEMBERS):
+            kwargs["nullable"] = False
+        elif hasattr(member, "optional"):
+            kwargs["nullable"] = member.optional
+        elif isinstance(member, Typed):
+            optional = member.validate_mode[0] == Validate.OptionalTyped
+            kwargs["nullable"] = optional
+        elif isinstance(member, Instance):
+            optional = member.validate_mode[0] == Validate.OptionalInstance
+            kwargs["nullable"] = optional
+
     if column_type is None:
         args = atom_member_to_sql_column(model, member, **metadata)
         if args is None:
@@ -676,6 +709,7 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
         args = column_type
     else:
         args = (column_type,)
+
     return sa.Column(column_name, *args, **kwargs)
 
 
