@@ -1,8 +1,9 @@
-# 0.7.10
+# 0.8.0
 
+- **breaking** Make `Relation` return a RelatedList with `save` and `load` methods.
 - Don't rewrite bytecode
-- Make `Relation` return a RelatedList with `save` and `load` methods.
 - Pass onclause when using join to prevent sqlalchemy from picking incorrect relation
+- Change Enum database name to include the table name
 
 # 0.7.9
 

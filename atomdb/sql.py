@@ -575,7 +575,9 @@ def atom_member_to_sql_column(
         # TODO: Add min / max
         return sa.Float()
     elif isinstance(member, api.Enum):
-        return sa.Enum(*member.items, name=member.name)
+        model_name = model.__model__.replace(".", "_")
+        enum_name = f"{model_name}_{member.name}"
+        return sa.Enum(*member.items, name=enum_name)
     elif hasattr(api, "IntEnum") and isinstance(member, api.IntEnum):  # type: ignore
         return sa.SmallInteger()
     elif isinstance(member, FK_TYPES):
