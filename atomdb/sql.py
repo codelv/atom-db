@@ -1186,15 +1186,18 @@ class SQLQuerySet(Atom, Generic[T]):
         tables = {from_table}
         use_labels = bool(self.related_clauses)
         outer_join = self.outer_join
+        existing_joins = set()
         for clause in self.related_clauses:
             model = p.model
             table = p.table
 
             # Walk the fk relations
+            alias = []
             for part in clause.split("__"):
                 m = model.members().get(part)
                 assert m is not None, f"{model} has no field {part}"
 
+                alias.append(part)
                 rel_model_types = resolve_member_types(m)
                 assert rel_model_types is not None
                 rel_model = rel_model_types[0]
@@ -1212,14 +1215,27 @@ class SQLQuerySet(Atom, Generic[T]):
                     # Case when looking though the relation
                     # r = await Job.objects.filter(roles__name="foo")
                     backref = resolve_backref(model, m.through or rel_model)
-                    onclause = rel_table.c[backref.name] == table.c[model.__pk__]
+                    rel_key = backref.name
+                    self_key = model.__pk__
                 else:
                     # Normal foreign key cases or select related
                     # r = await JobRole.objects.filter(job__status="live")
-                    onclause = rel_table.c[rel_model.__pk__] == table.c[m.name]
-                from_table = from_table.join(
-                    rel_table, onclause=onclause, isouter=outer_join
-                )
+                    rel_key = rel_model.__pk__
+                    self_key = m.name
+
+                join_key = (model, self_key, rel_model, rel_key)
+
+                # Avoid duplicate join, eg `select_related('a', 'a__b")`
+                # would join on a twice.
+                # TODO: Cannot join the same table twice, need to use alias
+                # where `select_related('a__b', 'a__b")`
+                if join_key not in existing_joins:
+                    onclause = table.c[self_key] == rel_table.c[rel_key]
+                    from_table = from_table.join(
+                        rel_table, onclause=onclause, isouter=outer_join
+                    )
+                    existing_joins.add(join_key)
+
                 tables.add(rel_table)
                 model = rel_model
                 table = rel_table
@@ -1252,7 +1268,6 @@ class SQLQuerySet(Atom, Generic[T]):
 
         if self.query_offset:
             q = q.offset(self.query_offset)
-
         return q
 
     def select_related(

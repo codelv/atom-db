@@ -83,6 +83,8 @@ class Job(SQLModel):
     enabled = Bool(True)
     roles = Relation(lambda: JobRole)
     duration = Instance(timedelta)
+    manager = Instance(User)
+    # FIXME: lead = Instance(User)
 
 
 class JobSkill(SQLModel):
@@ -188,7 +190,7 @@ class Page(SQLModel):
 class PageImage(SQLModel):
     # Example through table for job role
     page = Instance(Page).tag(nullable=False)
-    image = Instance(Page).tag(nullable=False)
+    image = Instance(Image).tag(nullable=False)
 
     class Meta:
         db_table = "page_image_m2m"
@@ -688,7 +690,7 @@ async def test_query_bad_column_name(db):
 
 
 async def test_query_select_related(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
     # Create second user
     job = await Job.objects.create(name=faker.job())
     await JobRole.objects.create(job=job, name=faker.job())
@@ -723,7 +725,7 @@ async def test_query_select_related(db):
 
 
 async def test_query_select_related_multiple(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
     await JobRole.objects.create(
         job=await Job.objects.create(name="Manager"),
         skill=await JobSkill.objects.create(name="Excel"),
@@ -761,13 +763,17 @@ async def test_query_select_related_multiple(db):
 
 
 async def test_query_select_related_filter(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
+
+    boss = await User.objects.create(name="Boss man")
+    monkey = await User.objects.create(name="Code monkey")
+
     await JobRole.objects.create(
-        job=await Job.objects.create(name="Manager"),
+        job=await Job.objects.create(name="Manager", manager=boss),
         skill=await JobSkill.objects.create(name="Excel"),
         name="Sr Manager",
     )
-    dev = await Job.objects.create(name="Dev")
+    dev = await Job.objects.create(name="Dev", manager=boss)  # FIXME:, lead=monkey)
     await JobRole.objects.create(
         job=dev,
         skill=await JobSkill.objects.create(name="C++"),
@@ -778,17 +784,37 @@ async def test_query_select_related_filter(db):
         skill=await JobSkill.objects.create(name="Python"),
         name="Jr Dev",
     )
-    del dev
+    del dev, boss, monkey
     Job.objects.cache.clear()
     JobRole.objects.cache.clear()
     JobSkill.objects.cache.clear()
+    User.objects.cache.clear()
 
     r = await JobRole.objects.select_related("job", "skill").get(
         job__enabled=True, skill__name__startswith="C"
     )
     assert r.name == "Sr Dev"
     assert r.job.name == "Dev"
+    assert not r.job.manager.__restored__
     assert r.skill.name == "C++"
+
+    del r
+    Job.objects.cache.clear()
+    JobRole.objects.cache.clear()
+    JobSkill.objects.cache.clear()
+    User.objects.cache.clear()
+
+    # Test that duplicate select on job does not lead to an error
+    r = await JobRole.objects.select_related("job", "job__manager", "skill").get(
+        job__manager__name__contains="Boss",
+        # FIXME: job__lead__name__contains="monkey",
+        skill__name__startswith="P",
+    )
+    assert r.name == "Jr Dev"
+    assert r.job.name == "Dev"
+    assert r.job.manager.name == "Boss man"
+    # FIXME: assert r.job.lead.name == "Code monkey"
+    assert r.skill.name == "Python"
 
 
 async def test_query_prefetch_related_invalid(db):
@@ -1009,7 +1035,7 @@ async def test_get_or_create(db):
 
 
 async def test_create(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     job = await Job.objects.create(name=faker.job())
     assert job and job._id
@@ -1031,7 +1057,7 @@ async def test_bulk_create(db):
 
 
 async def test_transaction_rollback(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     with pytest.raises(ValueError):
         async with Job.objects.connection() as conn:
@@ -1061,7 +1087,7 @@ async def test_transaction_rollback(db):
 
 
 async def test_transaction_commit(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     async with Job.objects.connection() as conn:
         trans = await conn.begin()
@@ -1244,7 +1270,7 @@ async def test_column_rename(db):
 
 
 async def test_query_many_to_one(db):
-    await reset_tables(Job, JobSkill, JobRole)
+    await reset_tables(User, Job, JobSkill, JobRole)
 
     jobs = []
 
@@ -1300,7 +1326,7 @@ async def test_query_many_to_one(db):
 
 
 async def test_query_multiple_joins(db):
-    await reset_tables(Job, JobSkill, JobRole, JobTask)
+    await reset_tables(User, Job, JobSkill, JobRole, JobTask)
 
     ceo = await Job.objects.create(name="CEO")
     cfo = await Job.objects.create(name="CFO")
