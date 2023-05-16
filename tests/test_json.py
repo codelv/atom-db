@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from atom.api import Bool, Bytes, ForwardInstance, Instance, List, Str
+from atom.api import Bool, Bytes, ForwardInstance, Instance, List, Set, Str, Tuple
 
 from atomdb.base import JSONModel
 
@@ -44,6 +44,20 @@ class Tree(JSONModel):
 
 class Amount(JSONModel):
     total = Instance(Decimal)
+
+
+class ImageExtra(JSONModel):
+    name = Str()
+    enabled = Bool()
+
+
+class Image(JSONModel):
+    tags = Set(str)
+    extras = Set(ImageExtra)
+
+
+class Point(JSONModel):
+    position = Tuple(float)
 
 
 async def test_json_dates():
@@ -95,6 +109,34 @@ async def test_json_list():
     assert r.files[0].name == f1.name and r.files[0].data == f1.data
     assert r.files[1].name == f2.name and r.files[1].data == f2.data
     assert r.files[1].id == f2.id
+
+
+async def test_json_set():
+    obj = Image(tags={"cat", "dog"})
+    state = obj.__getstate__()
+    data = json.dumps(state)
+    r = await Image.restore(json.loads(data))
+    assert r.tags == {"cat", "dog"}
+
+
+async def test_json_set_nested():
+    crop = ImageExtra(name="crop", enabled=True)
+    obj = Image(extras={crop})
+    state = obj.__getstate__()
+    data = json.dumps(state)
+    r = await Image.restore(json.loads(data))
+    assert len(r.extras) == 1
+    for it in r.extras:
+        assert it.name == crop.name
+        assert it.enabled == crop.enabled
+
+
+async def test_json_tuple():
+    obj = Point(position=(2.1, 3.3))
+    state = obj.__getstate__()
+    data = json.dumps(state)
+    r = await Point.restore(json.loads(data))
+    assert r.position == (2.1, 3.3)
 
 
 async def test_json_cyclical():

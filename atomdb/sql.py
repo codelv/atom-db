@@ -519,6 +519,7 @@ def resolve_backref(model: Type["SQLModel"], through: Type["SQLModel"]) -> Membe
     for other_model, referring_member in model.__backrefs__:
         if other_model is through:
             return referring_member
+    raise ValueError(f"No backref relation found between {model} and {through}")
 
 
 @functools.lru_cache(1024)
@@ -697,7 +698,7 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
         elif isinstance(member, NON_NULL_MEMBERS):
             kwargs["nullable"] = False
         elif hasattr(member, "optional"):
-            kwargs["nullable"] = member.optional
+            kwargs["nullable"] = member.optional  # type: ignore
         elif isinstance(member, Typed):
             optional = member.validate_mode[0] == Validate.OptionalTyped
             kwargs["nullable"] = optional
@@ -1202,12 +1203,13 @@ class SQLQuerySet(Atom, Generic[T]):
             for part in clause.split("__"):
                 m = model.members().get(part)
                 assert m is not None, f"{model} has no field {part}"
+                assert issubclass(model, SQLModel)
 
                 alias.append(part)
                 rel_model_types = resolve_member_types(m)
                 assert rel_model_types is not None
                 rel_model = rel_model_types[0]
-                assert issubclass(rel_model, Model)
+                assert issubclass(rel_model, SQLModel)
                 rel_table = rel_model.objects.table
 
                 # For example:

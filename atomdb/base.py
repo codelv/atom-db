@@ -35,9 +35,7 @@ from atom.api import (
     List,
     Member,
     Property,
-    Set,
     Str,
-    Tuple,
     Typed,
     Value,
     set_default,
@@ -108,7 +106,7 @@ def is_primitive_member(m: Member) -> Optional[bool]:
     if hasattr(m, "resolve"):
         # These cannot be resolved until their dependencies are available
         return None
-    if isinstance(m, (Tuple, Set, List, Typed, Instance, Dict, Coerced)):
+    if isinstance(m, (List, Typed, Instance, Dict, Coerced)):
         try:
             types = resolve_member_types(m, resolve=False)
         except UnresolvableError:
@@ -204,12 +202,12 @@ class ModelSerializer(Atom):
     #: Mapping of type name to coercer function
     coercers = Dict(
         default={
-            "datetime.date": lambda s: date(**s),
-            "datetime.datetime": lambda s: datetime(**s),
-            "datetime.time": lambda s: time(**s),
-            "bytes": lambda s: b64decode(s["bytes"]),
-            "decimal": lambda s: Decimal(s["value"]),
-            "uuid": lambda s: UUID(s["id"]),
+            "datetime.date": lambda v, scope: date(**v),
+            "datetime.datetime": lambda v, scope: datetime(**v),
+            "datetime.time": lambda v, scope: time(**v),
+            "bytes": lambda v, scope: b64decode(v["bytes"]),
+            "decimal": lambda v, scope: Decimal(v["value"]),
+            "uuid": lambda v, scope: UUID(v["id"]),
         }
     )
 
@@ -283,6 +281,7 @@ class ModelSerializer(Atom):
 
         """
         if isinstance(v, dict):
+            unflatten = self.unflatten
             # Circular reference
             if scope and "__ref__" in v:
                 ref = v["__ref__"]
@@ -296,12 +295,18 @@ class ModelSerializer(Atom):
 
             # Convert py types
             if "__py__" in v:
-                coercer = self.coercers.get(v.pop("__py__"))
+                py_type = v.pop("__py__")
+                coercer = self.coercers.get(py_type)
                 if coercer:
-                    return coercer(v)
-            unflatten = self.unflatten
+                    if asyncio.iscoroutinefunction(coercer):
+                        return await coercer(v, scope)
+                    return coercer(v, scope)
+                elif py_type == "set" or py_type == "atomset":
+                    return {await unflatten(i) for i in v["values"]}
+                elif py_type == "tuple":
+                    return tuple([await unflatten(i) for i in v["values"]])
             return {k: await unflatten(i, scope) for k, i in v.items()}
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list):
             unflatten = self.unflatten
             return [await unflatten(item, scope) for item in v]
         return v
@@ -811,6 +816,10 @@ class JSONSerializer(ModelSerializer):
             return {"__py__": "decimal", "value": str(v)}
         if isinstance(v, UUID):
             return {"__py__": "uuid", "id": str(v)}
+        if isinstance(v, (tuple, set)):
+            flatten = self.flatten
+            type_name = v.__class__.__name__
+            return {"__py__": type_name, "values": [flatten(it) for it in v]}
         return super().flatten(v, scope)
 
     def flatten_object(self, obj: Model, scope: ScopeType) -> DictType[str, Any]:
