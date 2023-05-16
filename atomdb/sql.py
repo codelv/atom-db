@@ -224,6 +224,9 @@ class RelatedList(MutableSequence):
     def insert(self, i, v):
         self.values.insert(i, v)
 
+    def sort(self, *, key=None, reverse=False):
+        self.values.sort(key=key, reverse=reverse)
+
     def copy(self):
         return RelatedList(
             values=self.values.copy(),
