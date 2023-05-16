@@ -214,6 +214,9 @@ class RelatedList(MutableSequence):
     def __len__(self):
         return self.values.__len__()
 
+    def __eq__(self, other):
+        return self.values == other
+
     def __add__(self, other):
         return RelatedList(
             values=self.values + other,
