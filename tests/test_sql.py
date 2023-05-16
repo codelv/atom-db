@@ -225,8 +225,8 @@ class EmailTag(SQLModel):
 
 
 class Attachment(SQLModel):
-    id = Int().tag(primary_key=True)
-    email = Instance(Email).tag(nullable=False)
+    id = Int().tag(name="attachment_id", primary_key=True)
+    email = Instance(Email).tag(name="email_id", nullable=False)
     name = Str().tag(length=100)
     size = Int()
     data = Bytes()
@@ -571,6 +571,24 @@ async def test_query_related_reverse(db):
     assert jobs == [job, job2] or jobs == [job2, job]
 
     assert await Job.objects.filter(roles__in=[role, role2]).count() == 2
+
+
+async def test_query_related_renamed(db):
+    await reset_tables(Email, Attachment)
+    email = await Email.objects.create(
+        to="alice@example.com",
+        from_="bob@example.com",
+    )
+    await Attachment.objects.create(email=email, size=50)
+    email2 = await Email.objects.create(
+        to="alice@example.com",
+        from_="jill@example.com",
+    )
+    await Attachment.objects.create(email=email2, size=100)
+
+    # from_ is renamed to from
+    r = await Attachment.objects.get(email__from_="jill@example.com")
+    assert r.size == 100
 
 
 async def test_query_order_by(db):

@@ -1223,6 +1223,12 @@ class SQLQuerySet(Atom, Generic[T]):
                     rel_key = rel_model.__pk__
                     self_key = m.name
 
+                # Handled renamed fields
+                if self_key in model.__renamed_fields__:
+                    self_key = model.__renamed_fields__[self_key]
+                if rel_key in rel_model.__renamed_fields__:
+                    rel_key = rel_model.__renamed_fields__[rel_key]
+
                 join_key = (model, self_key, rel_model, rel_key)
 
                 # Avoid duplicate join, eg `select_related('a', 'a__b")`
