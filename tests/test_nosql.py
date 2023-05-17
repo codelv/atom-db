@@ -1,9 +1,9 @@
 import os
+import random
 from pprint import pprint
 
 import pytest
 from atom.api import Atom, Bool, Dict, Enum, ForwardInstance, Instance, List, Str
-from faker import Faker
 
 try:
     from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,9 +11,6 @@ try:
     from atomdb.nosql import NoSQLModel, NoSQLModelManager
 except ImportError:
     pytest.skip("mongo/motor is not available", allow_module_level=True)
-
-
-faker = Faker()
 
 
 class User(NoSQLModel):
@@ -85,7 +82,7 @@ async def test_simple_save_restore_delete(db):
     await User.objects.drop()
 
     # Save
-    user = User(name=faker.name(), email=faker.email(), active=True)
+    user = User(name="name", email="name@ex.com", active=True)
     await user.save()
     assert user._id is not None
 
@@ -110,7 +107,7 @@ async def test_simple_save_restore_delete(db):
     assert not u.active
 
     # Create second user
-    another_user = User(name=faker.name(), email=faker.email(), active=True)
+    another_user = User(name="other", email="other@ex.com", active=True)
     await another_user.save()
 
     # Delete
@@ -129,11 +126,11 @@ async def test_nested_save_restore(db):
     await Page.objects.drop()
     await Comment.objects.drop()
 
-    authors = [User(name=faker.name(), active=True) for i in range(2)]
+    authors = [User(name=f"User{i}", active=True) for i in range(2)]
     for a in authors:
         await a.save()
 
-    images = [Image(name=faker.job(), path=faker.image_url()) for i in range(10)]
+    images = [Image(name=f"Img{i}", path=f"/app/{i}") for i in range(10)]
 
     # Only save the first few, it should serialize the others
     for i in range(3):
@@ -141,13 +138,11 @@ async def test_nested_save_restore(db):
 
     pages = [
         Page(
-            title=faker.catch_phrase(),
-            body=faker.text(),
+            title=f"Page{i}",
+            body=f"Content{i}",
             author=author,
-            images=[
-                faker.random.choice(images) for j in range(faker.random.randint(0, 2))
-            ],
-            status=faker.random.choice(Page.status.items),
+            images=[random.choice(images) for j in range(random.randint(0, 2))],
+            status=random.choice(Page.status.items),
         )
         for i in range(4)
         for author in authors
@@ -157,15 +152,15 @@ async def test_nested_save_restore(db):
 
         # Generate comments
         comments = []
-        for i in range(faker.random.randint(1, 10)):
-            commentor = User(name=faker.name())
+        for i in range(random.randint(1, 10)):
+            commentor = User(name=f"User{i}")
             await commentor.save()
             comment = Comment(
                 author=commentor,
                 page=p,
-                status=faker.random.choice(Comment.status.items),
-                reply_to=faker.random.choice([None] + comments),
-                body=faker.text(),
+                status=random.choice(Comment.status.items),
+                reply_to=random.choice([None] + comments),
+                body=f"Body{i}",
             )
             comments.append(comment)
             await comment.save()
@@ -197,8 +192,8 @@ async def test_circular(db):
     # and doesn't create an infinite loop
     await Page.objects.drop()
 
-    p = Page(title=faker.catch_phrase(), body=faker.text())
-    related_page = Page(title=faker.catch_phrase(), body=faker.text(), related=[p])
+    p = Page(title="Home", body="HomeBody")
+    related_page = Page(title="Other", body="OtherBody", related=[p])
 
     # Create a circular reference
     p.related = [related_page]
@@ -217,7 +212,7 @@ async def test_load(db):
     # That an object can be loaded by setting the ID and calling load.
     await User.objects.drop()
 
-    authors = [User(name=faker.name(), active=True) for i in range(2)]
+    authors = [User(name=f"User{i}", active=True) for i in range(2)]
     for a in authors:
         await a.save()
 

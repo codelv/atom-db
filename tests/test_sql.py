@@ -21,7 +21,6 @@ from atom.api import (
     Str,
     Typed,
 )
-from faker import Faker
 
 if "DATABASE_URL" not in os.environ:
     os.environ[
@@ -57,8 +56,6 @@ from atomdb.sql import (  # noqa: E402
     SQLModel,
     SQLModelManager,
 )
-
-faker = Faker()
 
 
 class AbstractUser(SQLModel):
@@ -253,6 +250,19 @@ class Document(SQLModel):
 class Project(SQLModel):
     title = Str().tag(length=32)
     doc = Instance(Document)
+
+
+class Node(SQLModel):
+    id = Int().tag(primary_key=True)
+    name = Str().tag(length=10)
+    type = ForwardInstance(lambda: NodeType).tag(nullable=False)
+
+
+class NodeType(SQLModel):
+    id = Int().tag(primary_key=True)
+    name = Str().tag(length=10)
+    # This creates a cyclical FK
+    default_type = Instance(Node)
 
 
 def test_build_tables():
@@ -459,7 +469,7 @@ async def test_simple_save_restore_delete(db):
     await reset_tables(User)
 
     # Save
-    user = User(name=faker.name(), email=faker.email(), active=True)
+    user = User(name="Bob", email="bob@example.com", active=True)
     await user.delete()  # Deleting unsaved item does nothing
     await user.save()
     assert user._id is not None
@@ -481,7 +491,7 @@ async def test_simple_save_restore_delete(db):
     assert not u.active
 
     # Create second user
-    another_user = User(name=faker.name(), email=faker.email(), active=True)
+    another_user = User(name="Jill", email="jill@example.com", active=True)
     await another_user.save()
 
     # Delete
@@ -523,13 +533,13 @@ async def test_query(db):
 async def test_query_related(db):
     await reset_tables(User, Job, JobSkill, JobRole)
 
-    job = await Job.objects.create(name=faker.job())
-    job1 = await Job.objects.create(name=faker.job())
-    job2 = await Job.objects.create(name=faker.job())
+    job = await Job.objects.create(name="Chef")
+    job1 = await Job.objects.create(name="Waitress")
+    job2 = await Job.objects.create(name="Manager")
 
-    await JobRole.objects.create(job=job, name=faker.job())
-    await JobRole.objects.create(job=job1, name=faker.job())
-    role2 = await JobRole.objects.create(job=job2, name=faker.job())
+    await JobRole.objects.create(job=job, name="Cooking")
+    await JobRole.objects.create(job=job1, name="Serving")
+    role2 = await JobRole.objects.create(job=job2, name="Managing")
 
     roles = await JobRole.objects.filter(job__name__in=[job.name, job2.name])
     assert len(roles) == 2
@@ -556,13 +566,13 @@ async def test_query_related(db):
 async def test_query_related_reverse(db):
     await reset_tables(User, Job, JobSkill, JobRole)
 
-    job = await Job.objects.create(name=faker.job())
-    job1 = await Job.objects.create(name=faker.job())
-    job2 = await Job.objects.create(name=faker.job())
+    job = await Job.objects.create(name="Chef")
+    job1 = await Job.objects.create(name="Waitress")
+    job2 = await Job.objects.create(name="Manager")
 
-    role = await JobRole.objects.create(job=job, name=faker.job())
-    role1 = await JobRole.objects.create(job=job1, name=faker.job())
-    role2 = await JobRole.objects.create(job=job2, name=faker.job())
+    role = await JobRole.objects.create(job=job, name="Cooking")
+    role1 = await JobRole.objects.create(job=job1, name="Serving")
+    role2 = await JobRole.objects.create(job=job2, name="Managing")
 
     jobs = await Job.objects.filter(roles__name=role1.name)
     assert jobs == [job1]
@@ -596,7 +606,7 @@ async def test_query_order_by(db):
     # Create second user
     users = []
     for i in range(3):
-        user = User(name=faker.name(), email=faker.email(), age=i, active=True)
+        user = User(name=f"Name{i}", email=f"{i}@a.com", age=i, active=True)
         await user.save()
         users.append(user)
 
@@ -612,7 +622,7 @@ async def test_query_limit(db):
     # Create second user
     users = []
     for i in range(3):
-        user = User(name=faker.name(), email=faker.email(), age=i, active=True)
+        user = User(name=f"Name{i}", email=f"{i}@a.com", age=i, active=True)
         await user.save()
         users.append(user)
 
@@ -710,9 +720,9 @@ async def test_query_bad_column_name(db):
 async def test_query_select_related(db):
     await reset_tables(User, Job, JobSkill, JobRole)
     # Create second user
-    job = await Job.objects.create(name=faker.job())
-    await JobRole.objects.create(job=job, name=faker.job())
-    await JobRole.objects.create(name=faker.job())
+    job = await Job.objects.create(name="Chef")
+    await JobRole.objects.create(job=job, name="Cooking")
+    await JobRole.objects.create(name="Accounting")
     del job
 
     Job.objects.cache.clear()
@@ -975,13 +985,13 @@ async def test_query_prefetch_related_updates(db):
 async def test_query_values(db):
     await reset_tables(User)
     # Create second user
-    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    user = User(name="Bob", email="bob@email.com", age=40, active=True)
     await user.save()
 
-    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    user1 = User(name="Jack", email="jack@ex.com", age=30, active=False)
     await user1.save()
 
-    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    user2 = User(name="Bob", email="bob@other.com", age=20, active=False)
     await user2.save()
 
     vals = await User.objects.filter(active=True).values()
@@ -1005,13 +1015,13 @@ async def test_query_values(db):
 async def test_query_distinct(db):
     await reset_tables(User)
     # Create second user
-    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    user = User(name="Bob", email="bob@email.com", age=40, active=True)
     await user.save()
 
-    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    user1 = User(name="Jack", email="jack@ex.com", age=30, active=False)
     await user1.save()
 
-    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    user2 = User(name="Bob", email="bob@other.com", age=20, active=False)
     await user2.save()
 
     num_names = await User.objects.distinct("name").count()
@@ -1030,8 +1040,8 @@ async def test_query_distinct(db):
 async def test_get_or_create(db):
     await reset_tables(User, Job, JobSkill, JobRole)
 
-    name = faker.name()
-    email = faker.email()
+    name = "Bob"
+    email = "bob@example.com"
 
     user, created = await User.objects.get_or_create(name=name, email=email)
     assert created
@@ -1042,10 +1052,10 @@ async def test_get_or_create(db):
     assert not created and user.name == name and user.email == user.email
 
     # Test passing model
-    job, created = await Job.objects.get_or_create(name=faker.job())
+    job, created = await Job.objects.get_or_create(name="Accountant")
     assert job and created
 
-    role, created = await JobRole.objects.get_or_create(job=job, name=faker.job())
+    role, created = await JobRole.objects.get_or_create(job=job, name="Accounting")
     assert role and created and role.job._id == job._id
 
     role_check, created = await JobRole.objects.get_or_create(job=job, name=role.name)
@@ -1055,7 +1065,7 @@ async def test_get_or_create(db):
 async def test_create(db):
     await reset_tables(User, Job, JobSkill, JobRole)
 
-    job = await Job.objects.create(name=faker.job())
+    job = await Job.objects.create(name="Chef")
     assert job and job._id
 
     # DB should enforce unique ness
@@ -1082,11 +1092,11 @@ async def test_transaction_rollback(db):
             trans = await conn.begin()
             try:
                 # Must pass in the connection parameter for transactions
-                job = await Job.objects.create(name=faker.job(), connection=conn)
+                job = await Job.objects.create(name="Job", connection=conn)
                 assert job._id is not None
                 for i in range(3):
                     role = await JobRole.objects.create(
-                        job=job, name=faker.job(), connection=conn
+                        job=job, name=f"Role{i}", connection=conn
                     )
                     assert role._id is not None
                 complete = True
@@ -1111,11 +1121,11 @@ async def test_transaction_commit(db):
         trans = await conn.begin()
         try:
             # Must pass in the connection parameter for transactions
-            job = await Job.objects.create(name=faker.job(), connection=conn)
+            job = await Job.objects.create(name="Job", connection=conn)
             assert job._id is not None
             for i in range(3):
                 role = await JobRole.objects.create(
-                    job=job, name=faker.job(), connection=conn
+                    job=job, name=f"Role{i}", connection=conn
                 )
                 assert role._id is not None
         except Exception:
@@ -1131,13 +1141,13 @@ async def test_transaction_commit(db):
 async def test_transaction_delete(db):
     await reset_tables(User)
 
-    name = faker.name()
+    name = "Name"
     async with User.objects.connection() as conn:
         trans = await conn.begin()
         try:
             # Must pass in the connection parameter for transactions
             user = await User.objects.create(
-                name=name, email=faker.email(), age=20, active=True, connection=conn
+                name=name, email="test@ex.com", age=20, active=True, connection=conn
             )
             assert user._id is not None
             await User.objects.delete(name=name, connection=conn)
@@ -1154,12 +1164,12 @@ async def test_filters(db):
     await reset_tables(User)
 
     user, created = await User.objects.get_or_create(
-        name="Bob", email=faker.email(), age=21, active=True
+        name="Bob", email="bob@ex.com", age=21, active=True
     )
     assert created
 
     user2, created = await User.objects.get_or_create(
-        name="Tom", email=faker.email(), age=48, active=False, rating=10.0
+        name="Tom", email="tom@ex.com", age=48, active=False, rating=10.0
     )
     assert created
 
@@ -1228,13 +1238,13 @@ async def test_filter_exclude(db):
 async def test_update(db):
     await reset_tables(User)
     # Create second user
-    user = User(name="Bob", email=faker.email(), age=40, active=True)
+    user = User(name="Bob", email="bob@ex.com", age=40, active=True)
     await user.save()
 
-    user1 = User(name="Jack", email=faker.email(), age=30, active=False)
+    user1 = User(name="Jack", email="jack@ex.com", age=30, active=False)
     await user1.save()
 
-    user2 = User(name="Bob", email=faker.email(), age=20, active=False)
+    user2 = User(name="Bob", email="bob@other.com", age=20, active=False)
     await user2.save()
 
     assert await User.objects.filter(age=20).exists()
@@ -1268,7 +1278,7 @@ async def test_column_rename(db):
     """Columns can be tagged with custom names. Verify that it works."""
     await reset_tables(Email)
 
-    e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
+    e = Email(from_="jack@ex.com", to="jill@ex.com", body="Did you see this?")
     await e.save()
 
     # Check without use labels
@@ -1293,12 +1303,12 @@ async def test_query_many_to_one(db):
     jobs = []
 
     for i in range(5):
-        job = Job(name=faker.job())
+        job = Job(name=f"Job{i}")
         await job.save()
         jobs.append(job)
 
         for i in range(random.randint(1, 5)):
-            role = JobRole(name=faker.bs(), job=job)
+            role = JobRole(name=f"Role{i}", job=job)
             await role.save()
 
     loaded = []
@@ -1442,7 +1452,7 @@ async def test_save_errors(db):
 async def test_object_caching(db):
     await reset_tables(Email)
 
-    e = Email(from_=faker.email(), to=faker.email(), body=faker.job())
+    e = Email(from_="a", to="b", body="c")
     await e.save()
     pk = e._id
     aref = Email.objects.cache.get(pk)
@@ -1531,6 +1541,11 @@ async def test_relation_many_to_many_save(db):
     email.tags = [starred, draft]
     await email.tags.save()
     assert (await EmailTag.objects.count()) == 2
+
+
+@pytest.mark.skip(reason="Not yet supported")
+async def test_cyclical_foreign_keys(db):
+    await reset_tables(Node, NodeType)
 
 
 def test_invalid_meta_field():
