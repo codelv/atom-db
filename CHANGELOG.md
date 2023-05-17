@@ -5,6 +5,7 @@
 - Pass onclause when using join to prevent sqlalchemy from picking incorrect relation
 - Fix select_related with duplicate joins (eg `select_related('a', 'a__b')`)
 - Change Enum database name to include the table name
+- Add builtin set / tuple support for JSONModel
 
 # 0.7.9
 
