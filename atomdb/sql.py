@@ -12,15 +12,12 @@ import datetime
 import functools
 import logging
 import weakref
-from collections.abc import MutableSequence
 from decimal import Decimal
 from typing import Any
 from typing import Callable as CallableType
 from typing import ClassVar
 from typing import Dict as DictType
-from typing import Generic, Iterator
-from typing import List as ListType
-from typing import Optional, Sequence
+from typing import Generic, Iterator, Optional, Sequence
 from typing import Set as SetType
 from typing import Tuple as TupleType
 from typing import Type, TypeVar, Union, cast
@@ -30,6 +27,7 @@ from atom import api
 from atom.api import (
     Atom,
     Bool,
+    Coerced,
     ContainerList,
     Dict,
     ForwardInstance,
@@ -183,170 +181,164 @@ def find_sql_models() -> Iterator[Type["SQLModel"]]:
         yield model
 
 
-class RelatedList(MutableSequence):
-    """A proxy to the internal list which has methods to query a foreign key
-    one to many or many to many relation
-    """
+def create_related_list(kind, relation: "Relation", default: Any):
+    class RelatedList(Atom):
+        """A custom list which has methods to query a foreign key
+        one to many or many to many relation
+        """
 
-    def __init__(self, *, values, owner, relation):
-        self.values = values
-        self.owner = owner
-        self.relation = relation
+        values = List(ForwardInstance(kind), default=default)
+        owner = ForwardInstance(lambda: SQLModel)
 
-    def __getitem__(self, key):
-        if isinstance(key, slice):
+        def __init__(self, values=None, owner=None):
+            super().__init__(values=values or [], owner=owner)
+
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return RelatedList(
+                    values=self.values[key],
+                    owner=self.owner,
+                )
+            return self.values[key]
+
+        def __delitem__(self, key):
+            del self.values[key]
+
+        def __setitem__(self, key, value):
+            self.values[key] = value
+
+        def __iter__(self):
+            return self.values.__iter__()
+
+        def __len__(self):
+            return self.values.__len__()
+
+        def __getattr__(self, name):
+            return getattr(self.values, name)
+
+        def __add__(self, other):
             return RelatedList(
-                values=self.values[key],
+                values=self.values + other,
                 owner=self.owner,
-                relation=self.relation,
             )
-        return self.values[key]
 
-    def __delitem__(self, key):
-        del self.values[key]
+        def copy(self):
+            return RelatedList(
+                values=self.values.copy(),
+                owner=self.owner,
+            )
 
-    def __setitem__(self, key, value):
-        self.values[key] = value
-
-    def __iter__(self):
-        return self.values.__iter__()
-
-    def __len__(self):
-        return self.values.__len__()
-
-    def __eq__(self, other):
-        return self.values == other
-
-    def __add__(self, other):
-        return RelatedList(
-            values=self.values + other,
-            owner=self.owner,
-            relation=self.relation,
-        )
-
-    def insert(self, i, v):
-        self.values.insert(i, v)
-
-    def sort(self, *, key=None, reverse=False):
-        self.values.sort(key=key, reverse=reverse)
-
-    def copy(self):
-        return RelatedList(
-            values=self.values.copy(),
-            owner=self.owner,
-            relation=self.relation,
-        )
-
-    async def load(self) -> list:
-        """Returns a list of the related values."""
-        owner = self.owner
-        relation = self.relation
-        Model = cast(Type[SQLModel], type(owner))
-        ThroughModel = relation.through
-        if ThroughModel is not None:
-            # A many to many relation case. For example:
+        async def load(self) -> list:
+            """Returns a list of the related values."""
+            owner = self.owner
+            Model = cast(Type[SQLModel], type(owner))
+            ThroughModel = relation.through
+            if ThroughModel is not None:
+                # A many to many relation case. For example:
+                #
+                #   class Pizza(SQLModel):
+                #       toppings = Relation(lambda: Topping, through=lambda: PizzaTopping)
+                #   class Topping(SQLModel):
+                #       name = Str()
+                #   class PizzaTopping(SQLModel):
+                #       pizza = Instance(Pizza)
+                #       topping = Instance(Topping)
+                #
+                # When we have:
+                #   toppings = await pizza.toppings.load()
+                # The pizza is the owner, and the toppings member is the relation.
+                # So inlining it will be the same as the following:
+                #   toppings = [
+                #      row.topping await PizzaTopping.objects.select_related(
+                #          "topping").filter(pizza=pizza)
+                #   ]
+                #
+                RelModel = relation.to
+                relation_backref = resolve_backref(RelModel, ThroughModel)
+                if relation_backref is None:
+                    raise UnresolvableError(
+                        f"relation between {RelModel} and through model {ThroughModel}"
+                        f": Tried {RelModel.__backrefs__}"
+                    )
+                owner_backref = resolve_backref(Model, ThroughModel)
+                if owner_backref is None:
+                    raise UnresolvableError(
+                        f"relation between {Model} and through model {ThroughModel}"
+                        f": Tried {Model.__backrefs__}"
+                    )
+                return [
+                    getattr(row, relation_backref.name)
+                    for row in await ThroughModel.objects.select_related(
+                        relation_backref.name
+                    ).filter(**{owner_backref.name: owner})
+                ]
+            # A many to one relation case. For example:
             #
-            #   class Pizza(SQLModel):
-            #       toppings = Relation(lambda: Topping, through=lambda: PizzaTopping)
-            #   class Topping(SQLModel):
-            #       name = Str()
-            #   class PizzaTopping(SQLModel):
-            #       pizza = Instance(Pizza)
-            #       topping = Instance(Topping)
+            #   class Page(SQLModel):
+            #       comments = Relation(lambda: Comment)
+            #   class Comment(SQLModel):
+            #       page = Instance(Page)
             #
             # When we have:
-            #   toppings = await pizza.toppings.load()
-            # The pizza is the owner, and the toppings member is the relation.
+            #   comments = await page.comments.load()
+            # The page is the owner, and the comments member is the relation.
             # So inlining it will be the same as the following:
-            #   toppings = [
-            #      row.topping await PizzaTopping.objects.select_related(
-            #          "topping").filter(pizza=pizza)
-            #   ]
-            #
+            #   comments = await Comments.objects.filter(page=page)
             RelModel = relation.to
-            relation_backref = resolve_backref(RelModel, ThroughModel)
-            if relation_backref is None:
-                raise UnresolvableError(
-                    f"relation between {RelModel} and through model {ThroughModel}"
-                    f": Tried {RelModel.__backrefs__}"
-                )
-            owner_backref = resolve_backref(Model, ThroughModel)
+            owner_backref = resolve_backref(Model, RelModel)
             if owner_backref is None:
                 raise UnresolvableError(
-                    f"relation between {Model} and through model {ThroughModel}"
+                    f"relation between {Model} and {RelModel}"
                     f": Tried {Model.__backrefs__}"
                 )
-            return [
-                getattr(row, relation_backref.name)
-                for row in await ThroughModel.objects.select_related(
-                    relation_backref.name
-                ).filter(**{owner_backref.name: owner})
-            ]
-        # A many to one relation case. For example:
-        #
-        #   class Page(SQLModel):
-        #       comments = Relation(lambda: Comment)
-        #   class Comment(SQLModel):
-        #       page = Instance(Page)
-        #
-        # When we have:
-        #   comments = await page.comments.load()
-        # The page is the owner, and the comments member is the relation.
-        # So inlining it will be the same as the following:
-        #   comments = await Comments.objects.filter(page=page)
-        RelModel = relation.to
-        owner_backref = resolve_backref(Model, RelModel)
-        if owner_backref is None:
-            raise UnresolvableError(
-                f"relation between {Model} and {RelModel}"
-                f": Tried {Model.__backrefs__}"
-            )
-        return await RelModel.objects.filter(**{owner_backref.name: owner})
+            return await RelModel.objects.filter(**{owner_backref.name: owner})
 
-    async def save(self, connection=None):
-        """Save the current list as the complete set of related items. This
-        should only be used for small sets of items.
-        """
-        owner = self.owner
-        assert owner is not None
-        current = set(self.values)
-        saved = set(await self.load())
-        ThroughModel = self.relation.through
-        if ThroughModel is not None:
-            Model = cast(Type[SQLModel], type(owner))
-            RelModel = self.relation.to
-            owner_backref = resolve_backref(Model, ThroughModel)
-            relation_backref = resolve_backref(RelModel, ThroughModel)
-            removed_ids = [obj._id for obj in saved.difference(current)]
+        async def save(self, connection=None):
+            """Save the current list as the complete set of related items. This
+            should only be used for small sets of items.
+            """
+            owner = self.owner
+            assert owner is not None
+            current = set(self)
+            saved = set(await self.load())
+            ThroughModel = relation.through
+            if ThroughModel is not None:
+                Model = cast(Type[SQLModel], type(owner))
+                RelModel = relation.to
+                owner_backref = resolve_backref(Model, ThroughModel)
+                relation_backref = resolve_backref(RelModel, ThroughModel)
+                removed_ids = [obj._id for obj in saved.difference(current)]
 
-            if removed_ids:
-                # Remove old
-                await ThroughModel.objects.filter(
-                    **{
-                        owner_backref.name: owner,
-                        f"{relation_backref.name}__in": removed_ids,
-                    }
-                ).delete(connection=connection)
+                if removed_ids:
+                    # Remove old
+                    await ThroughModel.objects.filter(
+                        **{
+                            owner_backref.name: owner,
+                            f"{relation_backref.name}__in": removed_ids,
+                        }
+                    ).delete(connection=connection)
 
-            # Add new
-            for added_item in current.difference(saved):
-                await ThroughModel.objects.create(
-                    **{
-                        owner_backref.name: owner,
-                        relation_backref.name: added_item,
-                    }
-                )
-        else:
-            for removed_item in saved.difference(current):
-                await removed_item.delete(connection=connection)
-            for added_item in current.difference(saved):
-                await added_item.save(connection=connection)
+                # Add new
+                for added_item in current.difference(saved):
+                    await ThroughModel.objects.create(
+                        **{
+                            owner_backref.name: owner,
+                            relation_backref.name: added_item,
+                        }
+                    )
+            else:
+                for removed_item in saved.difference(current):
+                    await removed_item.delete(connection=connection)
+                for added_item in current.difference(saved):
+                    await added_item.save(connection=connection)
+
+    return RelatedList
 
 
-class Relation(ContainerList):
+class Relation(Coerced):
     """A member which serves as a fk relation backref"""
 
-    __slots__ = ("_to", "_through")
+    __slots__ = ("_to", "_through", "type")
 
     def __init__(
         self,
@@ -355,16 +347,20 @@ class Relation(ContainerList):
         *,
         through: CallableType[[], Optional[Type[Model]]] = lambda: None,
     ):
-        super().__init__(ForwardInstance(item), default=default)  # type: ignore
+        RelatedList = create_related_list(item, self, default)
+        super().__init__(RelatedList)  # type: ignore
+        self.type = RelatedList
         self._to: Optional[Type[Model]] = None
         self._through = through
-        self.set_post_getattr_mode(
-            api.PostGetAttr.MemberMethod_ObjectValue, "post_getattr"
+        self.tag(store=False)
+        self.set_post_setattr_mode(
+            api.PostSetAttr.MemberMethod_ObjectOldNew, "post_setattr"
         )
 
-    def post_getattr(self, obj: Model, value: ListType[Model]):
-        """Wrap the value in a RelatedList instance"""
-        return RelatedList(values=value, owner=obj, relation=self)
+    def post_setattr(self, obj: Model, old: Any, new: Any):
+        """Set owner of RelatedList"""
+        new.owner = obj
+        return new
 
     def resolve(self) -> Type[Model]:
         return self.to
@@ -373,7 +369,7 @@ class Relation(ContainerList):
     def to(self) -> Type[Model]:
         to = self._to
         if to is None:
-            types = resolve_member_types(self.validate_mode[-1])
+            types = resolve_member_types(self.type.values.validate_mode[-1])
             assert types is not None
             to = self._to = types[0]
         return to

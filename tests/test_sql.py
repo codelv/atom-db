@@ -51,7 +51,6 @@ except ImportError as e:
 from atomdb.sql import (  # noqa: E402
     JSONModel,
     RelatedInstance,
-    RelatedList,
     Relation,
     SQLModel,
     SQLModelManager,
@@ -1493,7 +1492,7 @@ async def test_relation_many_to_one_save(db):
     all_attachments = email.attachments + [
         Attachment(email=email, name="new.jpg"),
     ]
-    email.attachments = list(all_attachments)
+    email.attachments = all_attachments
     await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 3
 
@@ -1517,9 +1516,15 @@ async def test_relation_many_to_one_save(db):
     assert (await Attachment.objects.filter(email=email).count()) == 2
 
     attachments = email.attachments[-1:]
-    assert isinstance(attachments, RelatedList)
+    assert isinstance(attachments, Email.attachments.type)
     await attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 1
+
+    # Make sure errors still work
+    with pytest.raises(TypeError):
+        email.attachments.append(Image())
+    with pytest.raises(TypeError):
+        email.attachments = [Image()]
 
 
 async def test_relation_many_to_many_save(db):
