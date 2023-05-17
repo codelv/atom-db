@@ -213,6 +213,9 @@ def create_related_list(kind, relation: "Relation", default: Any):
         def __len__(self):
             return self.values.__len__()
 
+        def __eq__(self, other):
+            return self.values == other
+
         def __getattr__(self, name):
             return getattr(self.values, name)
 
