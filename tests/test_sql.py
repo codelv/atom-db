@@ -378,27 +378,20 @@ def test_table_subclass():
 
 
 async def reset_tables(*models):
+    ignore_list = ("Unknown table", "does not exist", "no such table", "doesn't exist")
     for Model in models:
         try:
             await Model.objects.drop_alter_foreign_keys()
         except Exception as e:
             msg = str(e)
-            if not (
-                "Unknown table" in msg
-                or "does not exist" in msg
-                or "no such table" in msg
-            ):
+            if not any(it in msg for it in ignore_list):
                 raise  # Unexpected error
     for Model in models:
         try:
             await Model.objects.drop_table()
         except Exception as e:
             msg = str(e)
-            if not (
-                "Unknown table" in msg
-                or "does not exist" in msg
-                or "no such table" in msg
-            ):
+            if not any(it in msg for it in ignore_list):
                 raise  # Unexpected error
         await Model.objects.create_table()
     for Model in models:
