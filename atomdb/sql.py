@@ -970,17 +970,33 @@ class SQLTableProxy(Atom, Generic[T]):
             return self.engine.acquire()
         return ConnectionProxy(connection=connection)
 
-    def create_table(self):
+    def create_table(self, **kwargs):
         """A wrapper for create which catches the create queries then executes
         them
         """
         table = self.table
-        table.create()
+        table.bind.create(table, **kwargs)
         return table.bind.wait()
 
-    def drop_table(self):
+    def create_alter_foreign_keys(self, **kwargs):
+        """Create any foreign keys that have use_alter=True"""
         table = self.table
-        table.drop()
+        for constraint in self.table.foreign_key_constraints:
+            if getattr(constraint, "use_alter", False):
+                table.bind.create(constraint, **kwargs)
+        return table.bind.wait()
+
+    def drop_alter_foreign_keys(self, **kwargs):
+        """Create any foreign keys that have use_alter=True"""
+        table = self.table
+        for constraint in self.table.foreign_key_constraints:
+            if getattr(constraint, "use_alter", False):
+                table.bind.drop(constraint, **kwargs)
+        return table.bind.wait()
+
+    def drop_table(self, **kwargs):
+        table = self.table
+        table.bind.drop(table, **kwargs)
         return table.bind.wait()
 
     async def execute(self, *args, **kwargs):
@@ -1762,21 +1778,17 @@ class SQLBinding(Atom):
         return self.dialect.compiler(statement, parameters, engine=self, **kwargs)
 
     def create(self, entity, **kwargs):
-        kwargs["checkfirst"] = False
         node = ddl.SchemaGenerator(self.dialect, self, **kwargs)
         node.traverse_single(entity)
 
     def drop(self, entity, **kwargs):
-        kwargs["checkfirst"] = False
         node = ddl.SchemaDropper(self.dialect, self, **kwargs)
         node.traverse_single(entity)
 
     def _run_ddl_visitor(self, visitorcallable, element, connection=None, **kwargs):
-        kwargs["checkfirst"] = False
         visitorcallable(self.dialect, self, **kwargs).traverse_single(element)
 
     def _run_visitor(self, visitorcallable, element, connection=None, **kwargs):
-        kwargs["checkfirst"] = False
         node = visitorcallable(self.dialect, self, **kwargs)
         node.traverse_single(element)
 

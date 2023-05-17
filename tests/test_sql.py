@@ -254,14 +254,14 @@ class Project(SQLModel):
 class Node(SQLModel):
     id = Int().tag(primary_key=True)
     name = Str().tag(length=10)
-    type = ForwardInstance(lambda: NodeType).tag(nullable=False)
+    type = ForwardInstance(lambda: NodeType).tag(nullable=False, ondelete="CASCADE")
 
 
 class NodeType(SQLModel):
     id = Int().tag(primary_key=True)
     name = Str().tag(length=10)
     # This creates a cyclical FK
-    default_type = Instance(Node)
+    default_node = Instance(Node).tag(use_alter=True, ondelete="SET NULL")
 
 
 def test_build_tables():
@@ -380,6 +380,17 @@ def test_table_subclass():
 async def reset_tables(*models):
     for Model in models:
         try:
+            await Model.objects.drop_alter_foreign_keys()
+        except Exception as e:
+            msg = str(e)
+            if not (
+                "Unknown table" in msg
+                or "does not exist" in msg
+                or "no such table" in msg
+            ):
+                raise  # Unexpected error
+    for Model in models:
+        try:
             await Model.objects.drop_table()
         except Exception as e:
             msg = str(e)
@@ -390,6 +401,8 @@ async def reset_tables(*models):
             ):
                 raise  # Unexpected error
         await Model.objects.create_table()
+    for Model in models:
+        await Model.objects.create_alter_foreign_keys()
 
 
 @pytest.fixture
@@ -1548,9 +1561,44 @@ async def test_relation_many_to_many_save(db):
     assert (await EmailTag.objects.count()) == 2
 
 
-@pytest.mark.skip(reason="Not yet supported")
 async def test_cyclical_foreign_keys(db):
-    await reset_tables(Node, NodeType)
+    await reset_tables(NodeType, Node)
+
+    link_node_type = await NodeType.objects.create(
+        name="link",
+    )
+    web_node = await Node.objects.create(
+        name="web",
+        type=link_node_type,
+    )
+    await Node.objects.create(
+        name="file",
+        type=link_node_type,
+    )
+    link_node_type.default_node = web_node
+    await link_node_type.save()
+    del link_node_type
+
+    NodeType.objects.cache.clear()
+    Node.objects.cache.clear()
+    assert (await Node.objects.filter(type__name="link").count()) == 2
+    link_node = await NodeType.objects.select_related("default_node").get(name="link")
+    assert link_node.default_node.name == "web"
+
+    # Check ondelete="SET NULL"
+    await web_node.delete()
+    del link_node
+    NodeType.objects.cache.clear()
+    Node.objects.cache.clear()
+    link_node = await NodeType.objects.select_related(
+        "default_node", outer_join=True
+    ).get(name="link")
+    assert link_node.default_node is None
+
+    # Check ondelete="CASCADE"
+    assert (await Node.objects.count()) == 1
+    await link_node.delete()
+    assert (await Node.objects.count()) == 0
 
 
 def test_invalid_meta_field():
