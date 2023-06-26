@@ -1,3 +1,6 @@
+# 0.8.1
+- Add group by
+
 # 0.8.0
 
 - **breaking** Make `Relation` return a RelatedList with `save` and `load` methods.
