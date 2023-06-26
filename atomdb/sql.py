@@ -944,6 +944,7 @@ class SQLQuerySet(Atom, Generic[T]):
     prefetch_clauses = Set()
     outer_join = Bool()
     order_clauses = List()
+    groupby_clauses = List()
     distinct_clauses = Set()
     limit_count = Int()
     query_offset = Int()
@@ -1006,6 +1007,9 @@ class SQLQuerySet(Atom, Generic[T]):
 
         if self.query_offset:
             q = q.offset(self.query_offset)
+
+        if self.groupby_clauses:
+            q = q.group_by(*self.groupby_clauses)
 
         return q
 
@@ -1118,6 +1122,35 @@ class SQLQuerySet(Atom, Generic[T]):
             distinct_clauses.add(clause)
         return self.clone(
             distinct_clauses=distinct_clauses, related_clauses=related_clauses
+        )
+
+    def group_by(self, *args) -> "SQLQuerySet[T]":
+        """Apply group by on the given column.
+
+        Parameters
+        ----------
+        args: list[str or column]
+            Fields that must be grouped by.
+
+        Returns
+        -------
+        query: SQLQuerySet
+            A clone of this queryset with the group by terms added.
+
+        """
+        groupby_clauses = self.groupby_clauses.copy()
+        related_clauses = self.related_clauses.copy()
+        model = self.proxy.model
+        for arg in args:
+            if isinstance(arg, str):
+                # Convert name to sqlalchemy column
+                clause, new_clauses = resolve_member_column(model, arg)
+                related_clauses.update(new_clauses)
+            else:
+                clause = arg
+            groupby_clauses.append(clause)
+        return self.clone(
+            groupby_clauses=groupby_clauses, related_clauses=related_clauses
         )
 
     def where_clause(self, k: str, v: Any, related_clauses: SetType[str]):

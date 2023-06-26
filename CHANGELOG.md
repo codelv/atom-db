@@ -1,3 +1,8 @@
+
+# 0.7.10
+
+- Add group by
+
 # 0.7.9
 
 - Fix error with 3.11
