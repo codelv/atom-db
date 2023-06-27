@@ -1,4 +1,8 @@
 
+# 0.7.11
+
+- Support doing an or filter using django style queries by passing a dict arg
+
 # 0.7.10
 
 - Add group by
