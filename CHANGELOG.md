@@ -1,5 +1,6 @@
 # 0.8.1
-- Add group by
+
+- Rebase changes from  0.7.10 and 0.7.11
 
 # 0.8.0
 
@@ -9,6 +10,15 @@
 - Fix select_related with duplicate joins (eg `select_related('a', 'a__b')`)
 - Change Enum database name to include the table name
 - Add builtin set / tuple support for JSONModel
+
+# 0.7.11
+
+- Support doing an or filter using django style queries by passing a dict arg
+
+# 0.7.10
+
+- Add group by
+
 
 # 0.7.9
 

@@ -1206,6 +1206,14 @@ async def test_filters(db):
     users = await User.objects.exclude(age=21)
     assert len(users) == 1 and users[0].age == 48
 
+    # Or query
+    users = await User.objects.filter(dict(age__lt=18, age__gt=40))
+    assert len(users) == 1 and users[0].age == 48
+
+    # Exclude or
+    users = await User.objects.exclude(dict(age__lt=18, age__gt=40))
+    assert len(users) == 1 and users[0].age == 21
+
     # Not supported
     with pytest.raises(ValueError):
         users = await User.objects.filter(age__xor=1)

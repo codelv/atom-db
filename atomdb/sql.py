@@ -1490,7 +1490,7 @@ class SQLQuerySet(Atom, Generic[T]):
         Parameters
         ----------
         args: List
-            List of sqlalchemy filters
+            List of sqlalchemy filters or a dict of django style filters to or
         kwargs: Dict[str, object]
             Django style filters to use
 
@@ -1501,11 +1501,21 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         p = self.proxy
-        filter_clauses = self.filter_clauses + list(args)
+        filter_clauses = self.filter_clauses[:]
         related_clauses = self.related_clauses.copy()
 
         connection_kwarg = p.connection_kwarg
         restore_kwarg = p.restore_kwarg
+
+        # Build filter
+        for arg in args:
+            if isinstance(arg, dict):
+                or_clause = sa.or_(
+                    *[self.where_clause(k, v, related_clauses) for k, v in arg.items()]
+                )
+                filter_clauses.append(or_clause)
+            else:
+                filter_clauses.append(arg)
 
         # Build the filter operations
         for k, v in kwargs.items():
@@ -1528,7 +1538,7 @@ class SQLQuerySet(Atom, Generic[T]):
         Parameters
         ----------
         args: List
-            List of sqlalchemy filters
+            List of sqlalchemy filters or a dict of django style filters to or
         kwargs: Dict[str, object]
             Django style filters to use
 
@@ -1539,11 +1549,21 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         p = self.proxy
-        filter_clauses = self.filter_clauses + [sa.not_(it) for it in args]
+        filter_clauses = self.filter_clauses[:]
         related_clauses = self.related_clauses.copy()
 
         connection_kwarg = p.connection_kwarg
         restore_kwarg = p.restore_kwarg
+
+        # Build filter
+        for arg in args:
+            if isinstance(arg, dict):
+                or_clause = sa.or_(
+                    *[self.where_clause(k, v, related_clauses) for k, v in arg.items()]
+                )
+                filter_clauses.append(sa.not_(or_clause))
+            else:
+                filter_clauses.append(sa.not_(arg))
 
         # Build the filter operations
         for k, v in kwargs.items():
