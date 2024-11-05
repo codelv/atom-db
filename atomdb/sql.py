@@ -9,6 +9,7 @@ Created on Aug 2, 2018
 """
 import asyncio
 import datetime
+import enum
 import functools
 import logging
 import weakref
@@ -416,9 +417,9 @@ def py_type_to_sql_column(
         # Determine the type of the foreign key
         column = create_table_column(cls, cls._id)
         return (column.type, sa.ForeignKey(name, **kwargs))
-    elif issubclass(cls, str):
+    elif issubclass(cls, (str, enum.StrEnum)):
         return sa.String(**kwargs)
-    elif issubclass(cls, int):
+    elif issubclass(cls, (int, enum.IntEnum, enum.IntFlag)):
         return sa.Integer(**kwargs)
     elif issubclass(cls, float):
         return sa.Float(**kwargs)
@@ -1477,6 +1478,8 @@ class SQLQuerySet(Atom, Generic[T]):
         # Support lookups by model
         if isinstance(v, Model):
             v = v.serializer.flatten_object(v, scope={})
+        elif isinstance(v, enum.Enum):
+            v = v.value
         elif op in ("in", "notin"):
             # Flatten lists when using in or notin ops
             v = model.serializer.flatten(v, scope={})
