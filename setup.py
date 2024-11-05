@@ -25,7 +25,7 @@ setup(
     python_requires=">=3.7",
     install_requires=["atom>=0.7.0"],
     optional_requires=[
-        "sqlalchemy",
+        "sqlalchemy<2",
         "aiomysql",
         "aiopg",
         "aiosqlite",  # sql database support
