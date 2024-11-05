@@ -1500,6 +1500,7 @@ async def test_relation_many_to_one_save(db):
         Attachment(email=email, name="test.pdf"),
         Attachment(email=email, name="funny.jpg"),
     ]
+    assert isinstance(email.attachments, list)
     await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 2
 
@@ -1529,9 +1530,8 @@ async def test_relation_many_to_one_save(db):
     await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 2
 
-    attachments = email.attachments[-1:]
-    assert isinstance(attachments, Email.attachments.type)
-    await attachments.save()
+    email.attachments = email.attachments[-1:]
+    await email.attachments.save()
     assert (await Attachment.objects.filter(email=email).count()) == 1
 
     # Make sure errors still work

@@ -1,6 +1,8 @@
 # 0.8.1
 
 - Rebase changes from  0.7.10 and 0.7.11
+- Rework Relation & RelatedList so the return value is still a list instance
+- Flatten builtin enum.Enum types to their value
 
 # 0.8.0
 

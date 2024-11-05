@@ -19,6 +19,7 @@ from typing import Callable as CallableType
 from typing import ClassVar
 from typing import Dict as DictType
 from typing import Generic, Iterator, Optional, Sequence
+from typing import List as ListType
 from typing import Set as SetType
 from typing import Tuple as TupleType
 from typing import Type, TypeVar, Union, cast
@@ -44,6 +45,7 @@ from atom.api import (
     Validate,
     Value,
 )
+from atom.catom import atomclist
 from sqlalchemy.engine import ddl
 from sqlalchemy.sql import schema
 from sqlalchemy.sql.type_api import TypeEngine
@@ -182,61 +184,19 @@ def find_sql_models() -> Iterator[Type["SQLModel"]]:
         yield model
 
 
-def create_related_list(kind, relation: "Relation", default: Any):
-    class RelatedList(Atom):
+@functools.lru_cache(1024)
+def create_related_list(owner: Model, relation: "Relation"):
+    class RelatedList(atomclist):
         """A custom list which has methods to query a foreign key
         one to many or many to many relation
         """
-
-        values = List(ForwardInstance(kind), default=default)
-        owner = ForwardInstance(lambda: SQLModel)
-
-        def __init__(self, values=None, owner=None):
-            super().__init__(values=values or [], owner=owner)
-
-        def __getitem__(self, key):
-            if isinstance(key, slice):
-                return RelatedList(
-                    values=self.values[key],
-                    owner=self.owner,
-                )
-            return self.values[key]
-
-        def __delitem__(self, key):
-            del self.values[key]
-
-        def __setitem__(self, key, value):
-            self.values[key] = value
-
-        def __iter__(self):
-            return self.values.__iter__()
-
-        def __len__(self):
-            return self.values.__len__()
-
-        def __eq__(self, other):
-            return self.values == other
-
-        def __getattr__(self, name):
-            return getattr(self.values, name)
-
-        def __add__(self, other):
-            return RelatedList(
-                values=self.values + other,
-                owner=self.owner,
-            )
-
-        def copy(self):
-            return RelatedList(
-                values=self.values.copy(),
-                owner=self.owner,
-            )
+        __slots__ = ()
 
         async def load(self) -> list:
             """Returns a list of the related values."""
-            owner = self.owner
             Model = cast(Type[SQLModel], type(owner))
             ThroughModel = relation.through
+            RelModel = relation.to
             if ThroughModel is not None:
                 # A many to many relation case. For example:
                 #
@@ -257,7 +217,6 @@ def create_related_list(kind, relation: "Relation", default: Any):
                 #          "topping").filter(pizza=pizza)
                 #   ]
                 #
-                RelModel = relation.to
                 relation_backref = resolve_backref(RelModel, ThroughModel)
                 if relation_backref is None:
                     raise UnresolvableError(
@@ -288,7 +247,6 @@ def create_related_list(kind, relation: "Relation", default: Any):
             # The page is the owner, and the comments member is the relation.
             # So inlining it will be the same as the following:
             #   comments = await Comments.objects.filter(page=page)
-            RelModel = relation.to
             owner_backref = resolve_backref(Model, RelModel)
             if owner_backref is None:
                 raise UnresolvableError(
@@ -301,14 +259,12 @@ def create_related_list(kind, relation: "Relation", default: Any):
             """Save the current list as the complete set of related items. This
             should only be used for small sets of items.
             """
-            owner = self.owner
-            assert owner is not None
             current = set(self)
             saved = set(await self.load())
             ThroughModel = relation.through
+            RelModel = relation.to
             if ThroughModel is not None:
                 Model = cast(Type[SQLModel], type(owner))
-                RelModel = relation.to
                 owner_backref = resolve_backref(Model, ThroughModel)
                 relation_backref = resolve_backref(RelModel, ThroughModel)
                 removed_ids = [obj._id for obj in saved.difference(current)]
@@ -339,10 +295,10 @@ def create_related_list(kind, relation: "Relation", default: Any):
     return RelatedList
 
 
-class Relation(Coerced):
+class Relation(ContainerList):
     """A member which serves as a fk relation backref"""
 
-    __slots__ = ("_to", "_through", "type")
+    __slots__ = ("_to", "_through")
 
     def __init__(
         self,
@@ -351,20 +307,18 @@ class Relation(Coerced):
         *,
         through: CallableType[[], Optional[Type[Model]]] = lambda: None,
     ):
-        RelatedList = create_related_list(item, self, default)
-        super().__init__(RelatedList)  # type: ignore
-        self.type = RelatedList
+        super().__init__(ForwardInstance(item))  # type: ignore
         self._to: Optional[Type[Model]] = None
         self._through = through
         self.tag(store=False)
-        self.set_post_setattr_mode(
-            api.PostSetAttr.MemberMethod_ObjectOldNew, "post_setattr"
+        self.set_post_getattr_mode(
+            api.PostGetAttr.MemberMethod_ObjectValue, "post_getattr"
         )
 
-    def post_setattr(self, obj: Model, old: Any, new: Any):
-        """Set owner of RelatedList"""
-        new.owner = obj
-        return new
+    def post_getattr(self, obj: Model, value: ListType[Model]):
+        """Rewrite class to RelatedList"""
+        value.__class__ = create_related_list(obj, self)
+        return value
 
     def resolve(self) -> Type[Model]:
         return self.to
@@ -373,7 +327,7 @@ class Relation(Coerced):
     def to(self) -> Type[Model]:
         to = self._to
         if to is None:
-            types = resolve_member_types(self.type.values.validate_mode[-1])
+            types = resolve_member_types(self.validate_mode[-1])
             assert types is not None
             to = self._to = types[0]
         return to
