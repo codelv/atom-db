@@ -8,6 +8,7 @@ The full license is in the file LICENSE.text, distributed with this software.
 Created on Jun 12, 2018
 """
 import asyncio
+import enum
 import logging
 from base64 import b64decode, b64encode
 from collections.abc import MutableMapping
@@ -243,6 +244,8 @@ class ModelSerializer(Atom):
             return [flatten(item, scope) for item in v]
         elif isinstance(v, (dict, MutableMapping)):
             return {k: flatten(item, scope) for k, item in v.items()}
+        elif isinstance(v, enum.Enum):
+            return v.value
         # TODO: Handle other object types
         return v
 
