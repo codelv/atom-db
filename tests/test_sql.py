@@ -23,9 +23,9 @@ from atom.api import (
 )
 
 if "DATABASE_URL" not in os.environ:
-    os.environ[
-        "DATABASE_URL"
-    ] = "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
+    os.environ["DATABASE_URL"] = (
+        "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
+    )
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 

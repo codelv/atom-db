@@ -7,6 +7,7 @@ The full license is in the file LICENSE.text, distributed with this software.
 
 Created on Jun 12, 2018
 """
+
 import weakref
 
 import bson

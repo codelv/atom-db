@@ -7,6 +7,7 @@ The full license is in the file LICENSE.txt, distributed with this software.
 
 Created on Aug 2, 2018
 """
+
 import asyncio
 import datetime
 import enum
@@ -18,8 +19,9 @@ from typing import Any
 from typing import Callable as CallableType
 from typing import ClassVar
 from typing import Dict as DictType
-from typing import Generic, Iterator, Optional, Sequence
+from typing import Generic, Iterator
 from typing import List as ListType
+from typing import Optional, Sequence
 from typing import Set as SetType
 from typing import Tuple as TupleType
 from typing import Type, TypeVar, Union, cast
@@ -29,7 +31,6 @@ from atom import api
 from atom.api import (
     Atom,
     Bool,
-    Coerced,
     ContainerList,
     Dict,
     ForwardInstance,
@@ -190,6 +191,7 @@ def create_related_list(owner: Model, relation: "Relation"):
         """A custom list which has methods to query a foreign key
         one to many or many to many relation
         """
+
         __slots__ = ()
 
         async def load(self) -> list:
@@ -1152,7 +1154,7 @@ class SQLQuerySet(Atom, Generic[T]):
     force_restore = Bool()
 
     def clone(self, **kwargs) -> "SQLQuerySet[T]":
-        state = self.__getstate__()
+        state: DictType[str, Any] = self.__getstate__()  # type: ignore
         state.update(kwargs)
         return self.__class__(**state)
 
