@@ -373,9 +373,13 @@ def py_type_to_sql_column(
         # Determine the type of the foreign key
         column = create_table_column(cls, cls._id)
         return (column.type, sa.ForeignKey(name, **kwargs))
-    elif issubclass(cls, (str, enum.StrEnum)):
+    elif issubclass(cls, str) or (
+        hasattr(enum, "StrEnum") and isinstance(cls, enum.StrEnum)
+    ):
         return sa.String(**kwargs)
-    elif issubclass(cls, (int, enum.IntEnum, enum.IntFlag)):
+    elif issubclass(cls, int) or (
+        hasattr(enum, "IntEnum") and isinstance(cls, (enum.IntEnum, enum.IntFlag))
+    ):
         return sa.Integer(**kwargs)
     elif issubclass(cls, float):
         return sa.Float(**kwargs)
