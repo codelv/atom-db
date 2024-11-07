@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
     services:
       postgres:
         image: postgres
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
     services:
       mariadb:
         image: mariadb:latest
@@ -68,7 +68,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U aiomysql 'sqlalchemy<1.4' codecov pytest pytest-benchmark pytest-cov pytest-asyncio
+        run: pip install -U aiomysql 'sqlalchemy<2' codecov pytest pytest-benchmark pytest-cov pytest-asyncio
       - name: Install atom-db
         run: pip install -e ./
       - name: Run tests
@@ -82,7 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
 
     services:
       mongodb:
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v3
       - name: Setup python ${{ matrix.python-version}}
@@ -115,7 +115,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -U motor aiopg aiomysql 'sqlalchemy<1.5' mypy black isort flake8
+        run: pip install -U motor aiopg aiomysql 'sqlalchemy<2' mypy black isort flake8
       - name: Run checks
         run: |
             isort atomdb tests --check --diff
