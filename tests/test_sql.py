@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import logging
 import os
@@ -399,7 +400,7 @@ async def reset_tables(*models):
 
 
 @pytest.fixture
-async def db(event_loop):
+async def db():
     if DATABASE_URL.startswith("sqlite"):
         m = re.match(r"(.+)://(.+)", DATABASE_URL)
         assert m, "DATABASE_URL is an invalid format"
@@ -426,7 +427,7 @@ async def db(event_loop):
     if schema == "mysql":
         params["autocommit"] = True
 
-    params["loop"] = event_loop
+    params["loop"] = asyncio.get_running_loop()
 
     if schema == "sqlite":
         params["isolation_level"] = None  # autocommit
