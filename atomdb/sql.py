@@ -49,6 +49,8 @@ from atom.api import (
 from atom.catom import atomclist
 from sqlalchemy.engine import ddl
 from sqlalchemy.sql import schema
+from sqlalchemy.sql.elements import UnaryExpression
+from sqlalchemy.sql.operators import asc_op, desc_op
 from sqlalchemy.sql.type_api import TypeEngine
 
 from .base import (
@@ -147,6 +149,7 @@ VALID_META_FIELDS = (
     "constraints",
     "triggers",
     "composite_indexes",
+    "get_latest_by",
 )
 
 # Constraint naming conventions
@@ -743,6 +746,14 @@ def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
                     raise TypeError("Index must be a tuple or list")
                 args.extend([schema.Index(*index)])
 
+        # Validate get_latest_by
+        get_latest_by = getattr(meta, "get_latest_by", None)
+        if get_latest_by is not None:
+            if isinstance(get_latest_by, str):
+                get_latest_by = (get_latest_by,)
+            if not all(isinstance(f, str) for f in get_latest_by):
+                raise TypeError("Meta get_latest_by must be a str or tuple[str]")
+
     # Create table
     table = sa.Table(name, metadata, *args)
 
@@ -760,6 +771,33 @@ def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
             sa.event.listen(table, event, trigger)
 
     return table
+
+
+def model_latest_by_field(Model: Type["SQLModel"]) -> TupleType[str]:
+    meta = getattr(Model, "Meta", None)
+    get_latest_by = getattr(meta, "get_latest_by", None)
+    if get_latest_by is None:
+        raise TypeError(
+            f"Model '{Model}' has no get_latest_by field defined in it's Meta"
+        )
+    if isinstance(get_latest_by, str):
+        return (get_latest_by,)
+    return get_latest_by
+
+
+def reverse_order_clause(
+    clause: Union[schema.Column, UnaryExpression]
+) -> UnaryExpression:
+    if isinstance(clause, schema.Column):
+        # sql default is asc so reverse
+        return clause.desc()
+    if clause.modifier is desc_op:
+        modifier = asc_op
+    else:
+        modifier = desc_op
+    return UnaryExpression(
+        clause.element, modifier=modifier, wraps_column_expression=False
+    )
 
 
 class SQLModelSerializer(ModelSerializer):
@@ -1307,13 +1345,15 @@ class SQLQuerySet(Atom, Generic[T]):
             assert resolve_relation(self.proxy.model, r)
         return self.clone(prefetch_clauses=self.prefetch_clauses | set(related))
 
-    def order_by(self, *args) -> "SQLQuerySet[T]":
+    def order_by(self, *args, reverse: bool = False) -> "SQLQuerySet[T]":
         """Order the query by the given fields.
 
         Parameters
         ----------
         args: list[str or column]
             Fields to order by. A "-" prefix denotes decending.
+        reverse: bool
+            Reverse the order.
 
         Returns
         -------
@@ -1343,6 +1383,8 @@ class SQLQuerySet(Atom, Generic[T]):
                     clause = col.desc()
             else:
                 clause = arg
+            if reverse:
+                clause = reverse_order_clause(clause)
             if clause not in order_clauses:
                 order_clauses.append(clause)
         return self.clone(order_clauses=order_clauses, related_clauses=related_clauses)
@@ -1756,6 +1798,25 @@ class SQLQuerySet(Atom, Generic[T]):
                         prefetched_state = cache[pk] = {}
                     prefetched_state[field] = r
         return cache
+
+    async def earliest(self, *fields: str) -> Optional[T]:
+        if not fields:
+            fields = model_latest_by_field(self.proxy.model)
+        return await self.order_by(*fields).first()
+
+    async def latest(self, *fields: str) -> Optional[T]:
+        if not fields:
+            fields = model_latest_by_field(self.proxy.model)
+        return await self.order_by(*fields, reverse=True).first()
+
+    async def first(self) -> Optional[T]:
+        return await self.get()
+
+    async def last(self) -> Optional[T]:
+        if not self.order_clauses:
+            raise ValueError("Using last on an unordered query is not supported")
+        order_clauses = [reverse_order_clause(clause) for clause in self.order_clauses]
+        return await self.clone(order_clauses=order_clauses).get()
 
 
 class SQLBinding(Atom):

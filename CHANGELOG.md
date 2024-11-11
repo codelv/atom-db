@@ -3,6 +3,7 @@
 - Rebase changes from  0.7.10 and 0.7.11
 - Rework Relation & RelatedList so the return value is still a list instance
 - Flatten builtin enum.Enum types to their value
+- Add first, last, earliest, latest to QuerySet and support Meta get_latest_by
 
 # 0.8.0
 

@@ -183,6 +183,9 @@ class Page(SQLModel):
     # A bit verbose but provides a custom column specification
     data = Instance(object).tag(column=sa.Column("data", sa.LargeBinary()))
 
+    class Meta:
+        get_latest_by = "date"
+
 
 class PageImage(SQLModel):
     # Example through table for job role
@@ -619,8 +622,47 @@ async def test_query_order_by(db):
     users.sort(key=lambda it: it.name)
     assert await User.objects.order_by("name").all() == users
 
+    assert await User.objects.order_by("name").first() == users[0]
+    assert await User.objects.order_by("name").last() == users[-1]
+
     users.reverse()
     assert await User.objects.order_by("-name").all() == users
+
+    assert await User.objects.order_by("-name").first() == users[0]
+    assert await User.objects.order_by("-name").last() == users[-1]
+
+    with pytest.raises(ValueError):
+        assert await User.objects.last()  # Cannot do this on un-ordered query
+
+
+async def test_query_order_by_latest_earliest(db):
+    """Make sure update takes account for any renamed columns"""
+    await reset_tables(User, Page)
+
+    p1 = await Page.objects.create(
+        title="Test1",
+        ranking=20,
+        date=date(2024, 10, 1),
+        last_updated=datetime(2024, 10, 4, 12, 00),
+    )
+    p2 = await Page.objects.create(
+        title="Test2",
+        date=date(2024, 10, 2),
+        last_updated=datetime(2024, 10, 4, 12, 30),
+    )
+    p3 = await Page.objects.create(
+        title="Test3",
+        date=date(2024, 10, 3),
+        last_updated=datetime(2024, 10, 4, 11, 30),
+    )
+
+    assert await Page.objects.earliest() == p1
+    assert await Page.objects.latest() == p3
+    assert await Page.objects.latest("last_updated") == p2
+    assert await Page.objects.earliest("last_updated") == p3
+
+    with pytest.raises(TypeError):
+        await User.objects.earliest()  # Does not have a get latest by defined on meta
 
 
 async def test_query_limit(db):
