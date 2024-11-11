@@ -454,7 +454,10 @@ def resolve_member_column(
         model = rel_model
 
     # Lookup the member
-    m = model.members().get(field)
+    members = model.members()
+    if field not in members and field == "_id":
+        field = model.__pk__  # Support lookup using _id for pk
+    m = members.get(field)
     if m is not None:
         if m.metadata:
             # If the field has a different name assigned use that

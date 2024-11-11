@@ -534,6 +534,11 @@ async def test_query(db):
     await User.objects.delete(name=user.name)
     assert len(await User.objects.all()) == 9
 
+    # Test mapping _id to pk
+    u = await User.objects.first()
+    assert u.id
+    await User.objects.filter(_id=u.id).count() == 1
+
     # Delete them all
     await User.objects.delete(active=True)
     assert len(await User.objects.all()) == 0

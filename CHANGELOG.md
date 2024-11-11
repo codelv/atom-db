@@ -4,6 +4,7 @@
 - Rework Relation & RelatedList so the return value is still a list instance
 - Flatten builtin enum.Enum types to their value
 - Add first, last, earliest, latest to QuerySet and support Meta get_latest_by
+- Support using `_id` as alias to the primary key when doing filtering
 
 # 0.8.0
 
