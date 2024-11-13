@@ -197,7 +197,12 @@ def create_related_list(owner: Model, relation: "Relation"):
 
         __slots__ = ()
 
-        async def load(self) -> list:
+        def sort(self, *, key=None, reverse=False):
+            # AtomCListHandler calls super(type(self), self).sort which causes a loop
+            # in a loop because we fiddle with the __class__
+            super(atomclist, self).sort(key=key, reverse=reverse)
+
+        async def load(self, inplace: bool = True) -> list:
             """Returns a list of the related values."""
             Model = cast(Type[SQLModel], type(owner))
             ThroughModel = relation.through
@@ -234,38 +239,45 @@ def create_related_list(owner: Model, relation: "Relation"):
                         f"relation between {Model} and through model {ThroughModel}"
                         f": Tried {Model.__backrefs__}"
                     )
-                return [
+                items = [
                     getattr(row, relation_backref.name)
                     for row in await ThroughModel.objects.select_related(
                         relation_backref.name
                     ).filter(**{owner_backref.name: owner})
                 ]
-            # A many to one relation case. For example:
-            #
-            #   class Page(SQLModel):
-            #       comments = Relation(lambda: Comment)
-            #   class Comment(SQLModel):
-            #       page = Instance(Page)
-            #
-            # When we have:
-            #   comments = await page.comments.load()
-            # The page is the owner, and the comments member is the relation.
-            # So inlining it will be the same as the following:
-            #   comments = await Comments.objects.filter(page=page)
-            owner_backref = resolve_backref(Model, RelModel)
-            if owner_backref is None:
-                raise UnresolvableError(
-                    f"relation between {Model} and {RelModel}"
-                    f": Tried {Model.__backrefs__}"
-                )
-            return await RelModel.objects.filter(**{owner_backref.name: owner})
+            else:
+                # A many to one relation case. For example:
+                #
+                #   class Page(SQLModel):
+                #       comments = Relation(lambda: Comment)
+                #   class Comment(SQLModel):
+                #       page = Instance(Page)
+                #
+                # When we have:
+                #   comments = await page.comments.load()
+                # The page is the owner, and the comments member is the relation.
+                # So inlining it will be the same as the following:
+                #   comments = await Comments.objects.filter(page=page)
+                owner_backref = resolve_backref(Model, RelModel)
+                if owner_backref is None:
+                    raise UnresolvableError(
+                        f"relation between {Model} and {RelModel}"
+                        f": Tried {Model.__backrefs__}"
+                    )
+                items = await RelModel.objects.filter(**{owner_backref.name: owner})
+
+            if inplace:
+                for item in items:
+                    if item not in self:
+                        self.append(item)
+            return items
 
         async def save(self, connection=None):
             """Save the current list as the complete set of related items. This
             should only be used for small sets of items.
             """
             current = set(self)
-            saved = set(await self.load())
+            saved = set(await self.load(inplace=False))
             ThroughModel = relation.through
             RelModel = relation.to
             if ThroughModel is not None:

@@ -552,12 +552,14 @@ async def test_query_related(db):
     job2 = await Job.objects.create(name="Manager")
 
     await JobRole.objects.create(job=job, name="Cooking")
+    await JobRole.objects.create(job=job, name="Grilling")
+
     await JobRole.objects.create(job=job1, name="Serving")
     role2 = await JobRole.objects.create(job=job2, name="Managing")
 
     roles = await JobRole.objects.filter(job__name__in=[job.name, job2.name])
-    assert len(roles) == 2
-    assert await JobRole.objects.count(job__name__in=[job.name, job2.name]) == 2
+    assert len(roles) == 3
+    assert await JobRole.objects.count(job__name__in=[job.name, job2.name]) == 3
 
     roles = await JobRole.objects.filter(job__name=job2.name)
     assert len(roles) == 1
@@ -570,7 +572,17 @@ async def test_query_related(db):
     assert len(roles) == 1 and roles[0] == role2
 
     roles = await JobRole.objects.filter(job__name__not="none of the above")
-    assert len(roles) == 3
+    assert len(roles) == 4
+
+    # Test related list
+    assert len(job.roles) == 0  # Not loaded
+    await job.roles.load()
+    assert len(job.roles) == 2
+    job.roles.append(JobRole(name="Baking", job=job))
+    job.roles.sort(key=lambda it: it.name)
+    assert [it.name for it in job.roles] == ["Baking", "Cooking", "Grilling"]
+    await job.roles.save()
+    assert await JobRole.objects.filter(job__name=job.name).count() == 3
 
     # Cant do multiple joins
     with pytest.raises(ValueError):
