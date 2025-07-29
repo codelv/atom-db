@@ -1,3 +1,8 @@
+# 0.8.2
+
+- Print full traceback if error occurs while restoring
+- Make atom.api.Range, atom.api.FloatRange, and (when appliciable) atom.api.Enum primitives
+
 # 0.8.1
 
 - Rebase changes from  0.7.10 and 0.7.11

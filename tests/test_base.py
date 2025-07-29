@@ -5,12 +5,16 @@ from atom.api import (
     Bool,
     Coerced,
     Dict,
+    Enum,
+    Float,
+    FloatRange,
     ForwardInstance,
     ForwardTyped,
     Instance,
     Int,
     List,
     Property,
+    Range,
     Set,
     Tuple,
     Typed,
@@ -37,8 +41,14 @@ class Dummy(Model):
     _private = Int()
     computed = Int().tag(store=False)
     id = Int()
+    score = Float()
     enabled = Bool()
     string = Bool()
+    enum_of_str = Enum("a", "b", "c")
+    enum_of_opt_int = Enum(None, 1, 2, 3)
+    enum_of_types = Enum(bool, int)
+    int_range = Range()
+    float_range = FloatRange()
     list_of_int = List(int)
     list_of_str = List(str)
     list_of_any = List()
@@ -135,6 +145,10 @@ def test_is_db_field(attr, expected):
         ("id", True),
         ("enabled", True),
         ("string", True),
+        ("score", True),
+        ("enum_of_str", True),
+        ("enum_of_opt_int", True),
+        ("enum_of_types", False),
         ("list_of_int", True),
         ("list_of_any", False),
         ("list_of_str", True),
@@ -157,6 +171,8 @@ def test_is_db_field(attr, expected):
         ("coerced_int", True),
         ("prop", False),
         ("tagged_prop", False),
+        ("int_range", True),
+        ("float_range", True),
     ),
 )
 def test_is_primitive_member(attr, expected):

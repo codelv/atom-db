@@ -3,7 +3,17 @@ import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from atom.api import Bool, Bytes, ForwardInstance, Instance, List, Set, Str, Tuple
+from atom.api import (
+    Bool,
+    Bytes,
+    ForwardInstance,
+    Instance,
+    List,
+    Range,
+    Set,
+    Str,
+    Tuple,
+)
 
 from atomdb.base import JSONModel
 
@@ -17,6 +27,7 @@ class Dates(JSONModel):
 class Options(JSONModel):
     a = Bool()
     b = Str()
+    c = Range(0, 10)
 
 
 class User(JSONModel):
@@ -80,11 +91,15 @@ async def test_json_decimal():
 
 
 async def test_json_nested():
-    obj = User(options=Options(a=True, b="Yes"))
+    obj = User(options=Options(a=True, b="Yes", c=1))
     state = obj.__getstate__()
     data = json.dumps(state)
     r = await User.restore(json.loads(data))
-    assert r.options.a == obj.options.a and r.options.b == obj.options.b
+    assert (
+        r.options.a == obj.options.a
+        and r.options.b == obj.options.b
+        and r.options.c == obj.options.c
+    )
 
 
 async def test_json_bytes():

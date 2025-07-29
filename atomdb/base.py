@@ -11,6 +11,7 @@ Created on Jun 12, 2018
 import asyncio
 import enum
 import logging
+import traceback
 from base64 import b64decode, b64encode
 from collections.abc import MutableMapping
 from datetime import date, datetime, time
@@ -31,12 +32,15 @@ from atom.api import (
     Bool,
     Coerced,
     Dict,
+    Enum,
     Float,
+    FloatRange,
     Instance,
     Int,
     List,
     Member,
     Property,
+    Range,
     Str,
     Typed,
     Value,
@@ -50,6 +54,8 @@ StateType = DictType[str, Any]
 GetStateFn = Callable[[M, Optional[ScopeType]], StateType]
 RestoreStateFn = Callable[[M, StateType, Optional[ScopeType]], None]
 log = logging.getLogger("atomdb")
+
+PRIMITIVE_TYPES = (int, float, bool, str)
 
 
 def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
@@ -103,7 +109,7 @@ def is_primitive_member(m: Member) -> Optional[bool]:
         converted.
 
     """
-    if isinstance(m, (Bool, Str, Int, Float)):
+    if isinstance(m, (Bool, Str, Int, Float, FloatRange, Range)):
         return True
     if hasattr(m, "resolve"):
         # These cannot be resolved until their dependencies are available
@@ -115,7 +121,10 @@ def is_primitive_member(m: Member) -> Optional[bool]:
             return None
         if types is None:
             return False  # Value can be any type
-        if types and all(t in (int, float, bool, str) for t in types):
+        if types and all(t in PRIMITIVE_TYPES for t in types):
+            return True
+    if isinstance(m, Enum):
+        if all(item is None or isinstance(item, PRIMITIVE_TYPES) for item in m.items):
             return True
     return False
 
@@ -760,7 +769,7 @@ class Model(Atom, metaclass=ModelMeta):
             f"\nRef: {self.__ref__}"
             f"\nScope: {pformat(scope)}"
             f"\nState: {pformat(state)}"
-            f"\n{e}"
+            f"\n{''.join(traceback.format_exception(e))}"
         )
 
     # --------------------------------------------------------------------------

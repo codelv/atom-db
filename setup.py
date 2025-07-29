@@ -9,11 +9,20 @@ Created on Feb 21, 2019
 
 @author: jrm
 """
+import re
 from setuptools import setup, find_packages
+
+def find_version():
+    with open("atomdb/__init__.py") as f:
+        for line in f:
+            m = re.search(r'version = [\'"](.+)["\']', line)
+            if m:
+                return m.group(1)
+    raise Exception("Could not find version in atomdb/__init__.py")
 
 setup(
     name="atom-db",
-    version="0.8.1",
+    version=find_version(),
     author="CodeLV",
     author_email="frmdstryr@gmail.com",
     url="https://github.com/codelv/atom-db",
