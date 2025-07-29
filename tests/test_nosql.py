@@ -46,12 +46,12 @@ class Comment(NoSQLModel):
 
 
 @pytest.fixture
-def db(event_loop):
+def db():
     MONGO_URL = os.environ.get("MONGO_URL", None)
     if MONGO_URL:
-        client = AsyncIOMotorClient(MONGO_URL, io_loop=event_loop)
+        client = AsyncIOMotorClient(MONGO_URL)
     else:
-        client = AsyncIOMotorClient(io_loop=event_loop)
+        client = AsyncIOMotorClient()
     db = client.enaml_web_test_db
     mgr = NoSQLModelManager.instance()
     mgr.database = db
