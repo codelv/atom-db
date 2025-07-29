@@ -11,6 +11,7 @@ Created on Jun 12, 2018
 import asyncio
 import enum
 import logging
+import sys
 import traceback
 from base64 import b64decode, b64encode
 from collections.abc import MutableMapping
@@ -56,6 +57,16 @@ RestoreStateFn = Callable[[M, StateType, Optional[ScopeType]], None]
 log = logging.getLogger("atomdb")
 
 PRIMITIVE_TYPES = (int, float, bool, str)
+
+if sys.version_info >= (3, 10):
+
+    def format_exception(e: Exception) -> str:
+        return "".join(traceback.format_exception(e))
+
+else:
+
+    def format_exception(e: Exception) -> str:
+        return "".join(traceback.format_exception(e.__class__, e, e.__traceback__))
 
 
 def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
@@ -769,7 +780,7 @@ class Model(Atom, metaclass=ModelMeta):
             f"\nRef: {self.__ref__}"
             f"\nScope: {pformat(scope)}"
             f"\nState: {pformat(state)}"
-            f"\n{''.join(traceback.format_exception(e))}"
+            f"\n{format_exception(e)}"
         )
 
     # --------------------------------------------------------------------------
