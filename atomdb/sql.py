@@ -801,7 +801,7 @@ def model_latest_by_field(Model: Type["SQLModel"]) -> TupleType[str]:
 
 
 def reverse_order_clause(
-    clause: Union[schema.Column, UnaryExpression]
+    clause: Union[schema.Column, UnaryExpression],
 ) -> UnaryExpression:
     if isinstance(clause, schema.Column):
         # sql default is asc so reverse
@@ -1122,7 +1122,7 @@ class SQLTableProxy(Atom, Generic[T]):
         }
         obj = self.model(**state)
         await obj.save(force_insert=True, connection=connection)
-        return (obj, True)
+        return (cast(T, obj), True)
 
     async def create(self, **state) -> T:
         """Create a and save model with the given state.
