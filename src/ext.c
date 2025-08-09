@@ -50,7 +50,8 @@ static PyObject* atomlist_owner(PyObject* mod, PyObject* obj)
     struct AtomList* alist = (struct AtomList*) obj;
     if (!alist->pointer || !alist->pointer->data)
         Py_RETURN_NONE;
-    return Py_NewRef(alist->pointer->data);
+    Py_INCREF(alist->pointer->data);
+    return alist->pointer->data;
 }
 
 static PyMethodDef ext_methods[] = {
