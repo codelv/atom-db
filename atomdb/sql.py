@@ -70,6 +70,7 @@ from .base import (
     is_primitive_member,
     resolve_member_types,
 )
+from .ext import atomlist_owner
 
 # kwargs reserved for sqlalchemy table columns
 COLUMN_KWARGS = (
@@ -188,8 +189,7 @@ def find_sql_models() -> Iterator[Type["SQLModel"]]:
         yield model
 
 
-@functools.lru_cache(1024)
-def create_related_list(owner: Model, relation: "Relation"):
+def create_related_list(relation: "Relation"):
     class RelatedList(atomclist):
         """A custom list which has methods to query a foreign key
         one to many or many to many relation
@@ -204,6 +204,7 @@ def create_related_list(owner: Model, relation: "Relation"):
 
         async def load(self, inplace: bool = True) -> list:
             """Returns a list of the related values."""
+            owner = atomlist_owner(self)
             Model = cast(Type[SQLModel], type(owner))
             ThroughModel = relation.through
             RelModel = relation.to
@@ -276,6 +277,7 @@ def create_related_list(owner: Model, relation: "Relation"):
             """Save the current list as the complete set of related items. This
             should only be used for small sets of items.
             """
+            owner = atomlist_owner(self)
             current = set(self)
             saved = set(await self.load(inplace=False))
             ThroughModel = relation.through
@@ -315,7 +317,7 @@ def create_related_list(owner: Model, relation: "Relation"):
 class Relation(ContainerList):
     """A member which serves as a fk relation backref"""
 
-    __slots__ = ("_to", "_through")
+    __slots__ = ("_to", "_through", "_cls")
 
     def __init__(
         self,
@@ -327,14 +329,15 @@ class Relation(ContainerList):
         super().__init__(ForwardInstance(item))  # type: ignore
         self._to: Optional[Type[Model]] = None
         self._through = through
+        self._cls = create_related_list(self)
         self.tag(store=False)
         self.set_post_getattr_mode(
             api.PostGetAttr.MemberMethod_ObjectValue, "post_getattr"
         )
 
     def post_getattr(self, obj: Model, value: ListType[Model]):
-        """Rewrite class to RelatedList"""
-        value.__class__ = create_related_list(obj, self)
+        """Rewrite the class to RelatedList which adds context dependent load and save methods to the list"""
+        value.__class__ = self._cls
         return value
 
     def resolve(self) -> Type[Model]:

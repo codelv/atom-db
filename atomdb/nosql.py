@@ -48,7 +48,7 @@ class NoSQLModelSerializer(ModelSerializer):
         return await ModelType.objects.find_one({"_id": state["_id"]})
 
     def flatten_object(self, obj, scope):
-        ref = obj.__ref__
+        ref = id(obj)
         if ref in scope:
             return {"__ref__": ref, "__model__": obj.__model__}
         scope[ref] = obj

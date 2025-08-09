@@ -1,3 +1,8 @@
+# 0.8.3
+
+- Remove the `__ref__` member and use`id(self)` instead. State still contains the `__ref__` key.
+- Rework sql RelatedList to avoid caching and instead use the internal atomlist data pointer
+
 # 0.8.2
 
 - Print full traceback if error occurs while restoring

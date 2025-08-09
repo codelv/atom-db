@@ -18,7 +18,6 @@ from collections.abc import MutableMapping
 from datetime import date, datetime, time
 from decimal import Decimal
 from pprint import pformat
-from random import getrandbits
 from typing import Any, Callable, ClassVar
 from typing import Dict as DictType
 from typing import List as ListType
@@ -66,7 +65,7 @@ if sys.version_info >= (3, 10):
 else:
 
     def format_exception(e: Exception) -> str:
-        return "".join(traceback.format_exception(e.__class__, e, e.__traceback__))
+        return "".join(traceback.format_exception(e.__class__, e))
 
 
 def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
@@ -472,7 +471,7 @@ def generate_getstate(cls: Type["Model"]) -> GetStateFn:
     template = [
         "def __getstate__(self, scope=None):",
         "scope = scope or {}",
-        "scope[self.__ref__] = self",
+        "scope[id(self)] = self",
         "state = {",
     ]
     default_flatten = cls.serializer.flatten
@@ -499,7 +498,7 @@ def generate_getstate(cls: Type["Model"]) -> GetStateFn:
         template.append(f'    "{f}": {expr},')
 
     template.append('    "__model__": self.__model__,')
-    template.append('    "__ref__": self.__ref__,')
+    template.append('    "__ref__": id(self),')
     template.append("}")
     if "_id" in members:
         template.append("if self._id:")
@@ -709,9 +708,6 @@ class Model(Atom, metaclass=ModelMeta):
     # Internal model members
     # --------------------------------------------------------------------------
 
-    #: A unique ID used to handle cyclical serialization and deserialization
-    __ref__ = Int(factory=lambda: getrandbits(32))
-
     #: Flag to indicate if this model has been restored or saved
     __restored__ = Bool().tag(store=False)
 
@@ -777,7 +773,7 @@ class Model(Atom, metaclass=ModelMeta):
         log.warning(
             f"Error loading state:"
             f"{self.__model__}.{k} = {pformat(obj)}:"
-            f"\nRef: {self.__ref__}"
+            f"\nRef: {hex(id(self))}"
             f"\nScope: {pformat(scope)}"
             f"\nState: {pformat(state)}"
             f"\n{format_exception(e)}"
@@ -848,7 +844,7 @@ class JSONSerializer(ModelSerializer):
 
     def flatten_object(self, obj: Model, scope: ScopeType) -> DictType[str, Any]:
         """Flatten to just json but add in keys to know how to restore it."""
-        ref = obj.__ref__
+        ref = id(obj)
         if ref in scope:
             return {"__ref__": ref, "__model__": obj.__model__}
         else:

@@ -10,7 +10,7 @@ Created on Feb 21, 2019
 @author: jrm
 """
 import re
-from setuptools import setup, find_packages
+from setuptools import Extension, setup, find_packages
 
 def find_version():
     with open("atomdb/__init__.py") as f:
@@ -19,6 +19,14 @@ def find_version():
             if m:
                 return m.group(1)
     raise Exception("Could not find version in atomdb/__init__.py")
+
+ext_module = Extension(
+    "atomdb.ext",
+    ["src/ext.c"],
+    include_dirs=["src"],
+    language="c",
+)
+
 
 setup(
     name="atom-db",
@@ -40,6 +48,7 @@ setup(
         "aiosqlite",  # sql database support
         "motor",  # nosql database support
     ],
+    ext_modules=[ext_module],
     packages=find_packages(),
     package_data={'atomdb': ["py.typed"]}
 )
