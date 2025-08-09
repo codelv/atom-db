@@ -39,7 +39,7 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     requires=["atom"],
-    python_requires=">=3.7",
+    python_requires=">=3.10",
     install_requires=["atom>=0.7.0"],
     optional_requires=[
         "sqlalchemy<2",
