@@ -1658,11 +1658,17 @@ class SQLQuerySet(Atom, Generic[T]):
         if args:
             model = self.proxy.model
             columns = []
+            related_clauses = set()
             for col in args:
                 if isinstance(col, str):
-                    col, _ = resolve_member_column(model, col)
+                    col, new_clauses = resolve_member_column(model, col)
+                    related_clauses.update(new_clauses)
                 columns.append(col)
-            q = self.query("select", *columns)
+            if related_clauses:
+                q = self.select_related(*related_clauses)
+            else:
+                q = self
+            q = q.query("select", *columns)
         else:
             q = self.query("select")
         if group_by is not None:

@@ -1076,6 +1076,46 @@ async def test_query_values(db):
         await User.objects.values("name", "age", flat=True)
 
 
+async def test_query_related_values(db):
+    await reset_tables(Email, Attachment)
+
+    email_1 = await Email.objects.create(
+        to="bob@email.com", from_="jill@email.com", body="Foo"
+    )
+
+    email_2 = await Email.objects.create(
+        to="bob@email.com", from_="jill@email.com", body="Baz"
+    )
+
+    await Attachment.objects.create(
+        email=email_1,
+        name="file1.txt",
+        size=100,
+    )
+    await Attachment.objects.create(
+        email=email_1,
+        name="file2.txt",
+        size=50,
+    )
+    await Attachment.objects.create(
+        email=email_2,
+        name="file3.txt",
+        size=99,
+    )
+
+    sizes = await Email.objects.filter(id=email_1.id).values(
+        "attachments__size", flat=True
+    )
+    assert len(sizes) == 2
+    assert sum(sizes) == 150
+
+    sizes = await Email.objects.filter(id=email_2.id).values(
+        "attachments__size", flat=True
+    )
+    assert len(sizes) == 1
+    assert sum(sizes) == 99
+
+
 @pytest.mark.skipif(IS_MYSQL, reason="Distinct and count doesn't work")
 async def test_query_distinct(db):
     await reset_tables(User)
