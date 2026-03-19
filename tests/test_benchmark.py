@@ -105,8 +105,7 @@ def test_serialize_flat(benchmark):
 @pytest.mark.benchmark(group="base")
 def test_restore_flat(benchmark):
     def run():
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(Product.restore(flat_state))
+        asyncio.run(Product.restore(flat_state))
 
     benchmark(run)
 
@@ -125,7 +124,6 @@ def test_serialize_nested(benchmark):
 @pytest.mark.benchmark(group="base")
 def test_restore_nested(benchmark):
     def run():
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(Page.restore(nested_state))
+        asyncio.run(Page.restore(nested_state))
 
     benchmark(run)

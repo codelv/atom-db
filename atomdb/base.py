@@ -8,7 +8,6 @@ The full license is in the file LICENSE.text, distributed with this software.
 Created on Jun 12, 2018
 """
 
-import asyncio
 import enum
 import logging
 import traceback
@@ -16,6 +15,7 @@ from base64 import b64decode, b64encode
 from collections.abc import MutableMapping
 from datetime import date, datetime, time
 from decimal import Decimal
+from inspect import iscoroutinefunction
 from pprint import pformat
 from typing import Any, Callable, ClassVar
 from typing import Dict as DictType
@@ -310,7 +310,7 @@ class ModelSerializer(Atom):
                 py_type = v.pop("__py__")
                 coercer = self.coercers.get(py_type)
                 if coercer:
-                    if asyncio.iscoroutinefunction(coercer):
+                    if iscoroutinefunction(coercer):
                         return await coercer(v, scope)
                     return coercer(v, scope)
                 elif py_type == "set" or py_type == "atomset":
@@ -595,7 +595,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
                 expr = f"await default_unflatten(state['{f}'], scope)"
         else:
             namespace[f"unflatten_{f}"] = unflatten
-            if asyncio.iscoroutinefunction(unflatten):
+            if iscoroutinefunction(unflatten):
                 expr = f"await unflatten_{f}(state['{f}'], scope)"
             else:
                 expr = f"unflatten_{f}(state['{f}'], scope)"

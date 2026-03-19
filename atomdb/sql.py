@@ -15,6 +15,7 @@ import functools
 import logging
 import weakref
 from decimal import Decimal
+from inspect import iscoroutinefunction
 from typing import Any
 from typing import Callable as CallableType
 from typing import ClassVar
@@ -2067,7 +2068,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
         else:
             # Use provided unflatten function
             namespace[f"unflatten_{f}"] = unflatten
-            if asyncio.iscoroutinefunction(unflatten):
+            if iscoroutinefunction(unflatten):
                 expr = f"self.{f} = await unflatten_{f}(v, scope)"
             else:
                 expr = f"self.{f} = unflatten_{f}(v, scope)"
