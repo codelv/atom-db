@@ -3,6 +3,7 @@
 - Fix error that would occur when restoring optional Typed member with no value
 - Use a new `RestoreError` exception that improves error messages when the error mode is set to `raise` 
 - Fix an edge case where a cached result is not pulled when tables are joined
+- Support Python 3.14
 
 # 0.8.4
 
