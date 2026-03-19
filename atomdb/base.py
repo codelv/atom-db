@@ -497,6 +497,20 @@ def generate_getstate(cls: Type["Model"]) -> GetStateFn:
     return generate_function(source, namespace, "__getstate__")
 
 
+class RestoreError(Exception):
+    """An exception raised when an error occurs while restoring a model from state."""
+
+    def __init__(self, field: str, cls: Type["Model"], e: Exception):
+        self.field = field
+        self.cls = cls
+        self.exc = e
+
+    def __str__(self):
+        return (
+            f"Error restoring '{self.field}' on object of type {self.cls}: {self.exc}"
+        )
+
+
 def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
     """Generate an optimized __restorestate__ function for the given model.
 
@@ -548,6 +562,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
     namespace: DictType[str, Any] = {
         "default_unflatten": default_unflatten,
+        "RestoreError": RestoreError,
     }
     for order, f, m, unflatten in setters:
         # Since f is potentially an untrusted input, make sure it is a valid
@@ -569,7 +584,9 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
                     RelModel = types[0]
             if RelModel is not None:
                 namespace[f"rel_model_{f}"] = RelModel
-                expr = f"await rel_model_{f}.restore(state['{f}'])"
+                expr = (
+                    f"await rel_model_{f}.restore(v) if (v := state['{f}']) else None"
+                )
             elif is_primitive_member(m):
                 # Direct assignment
                 expr = f"state['{f}']"
@@ -584,21 +601,20 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
                 expr = f"unflatten_{f}(state['{f}'], scope)"
 
         # Do the assignment
-        if on_error == "raise":
-            template.append(f"    self.{f} = {expr}")
+        if on_error == "ignore":
+            handler = "pass"
+        elif on_error == "log":
+            handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
         else:
-            if on_error == "log":
-                handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
-            else:
-                handler = "pass"
-            template.extend(
-                [
-                    "    try:",
-                    f"        self.{f} = {expr}",
-                    "    except Exception as e:",
-                    f"        {handler}",
-                ]
-            )
+            handler = f"raise RestoreError('{f}', self.__class__, e) from e"
+        template.extend(
+            [
+                "    try:",
+                f"        self.{f} = {expr}",
+                "    except Exception as e:",
+                f"        {handler}",
+            ]
+        )
 
     # Update restored state
     template.append("self.__restored__ = True")
@@ -778,6 +794,7 @@ class Model(Atom, metaclass=ModelMeta):
     @classmethod
     async def restore(cls: Type[M], state: StateType, **kwargs: Any) -> M:
         """Restore an object from the database state"""
+        assert state is not None
         obj = cls.__new__(cls)
         await obj.__restorestate__(state)
         return obj
@@ -801,6 +818,8 @@ class JSONSerializer(ModelSerializer):
         a __py__ field and arguments to reconstruct it. Also see the coercers
 
         """
+        if v is None:
+            return None
         if isinstance(v, (date, datetime, time)):
             # This is inefficient space wise but still allows queries
             s: DictType[str, Any] = {

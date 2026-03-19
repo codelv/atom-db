@@ -1,3 +1,13 @@
+# 0.8.5
+
+- Fix error that would occur when restoring optional Typed member with no value
+- Use a new `RestoreError` exception that improves error messages when the error mode is set to `raise` 
+- Fix an edge case where a cached result is not pulled when tables are joined
+
+# 0.8.4
+
+- Fix values query if it contained a related column
+
 # 0.8.3
 
 - Remove the `__ref__` member and use`id(self)` instead. State still contains the `__ref__` key.

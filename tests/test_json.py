@@ -3,19 +3,25 @@ import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
+import pytest
 from atom.api import (
     Bool,
     Bytes,
     ForwardInstance,
     Instance,
+    Int,
     List,
     Range,
     Set,
     Str,
     Tuple,
+    Typed,
 )
 
-from atomdb.base import JSONModel
+from atomdb.base import JSONModel, RestoreError
+
+# Set default to raise
+JSONModel.__on_error__ = "raise"
 
 
 class Dates(JSONModel):
@@ -69,6 +75,17 @@ class Image(JSONModel):
 
 class Point(JSONModel):
     position = Tuple(float)
+
+
+class Position(JSONModel):
+    x = Int()
+    y = Int()
+
+
+class Rectangle(JSONModel):
+    height = Range(low=0, value=1)
+    width = Range(low=0, value=1)
+    center = Typed(Position)
 
 
 async def test_json_dates():
@@ -169,3 +186,31 @@ async def test_json_cyclical():
     assert r.name == "a"
     assert r.related.name == b.name
     assert r.related.related == r
+
+
+async def test_json_optional_typed_model():
+    # Test save & restore of optional typed member with no value
+    rect = Rectangle(width=1, height=2)
+    state = JSONModel.serializer.flatten(rect)
+    rect = await JSONModel.serializer.unflatten(state)
+    assert rect.center is None
+    # Now set the value and make sure it's restored'
+    rect.center = Position(x=10, y=20)
+    state = JSONModel.serializer.flatten(rect)
+    rect = await JSONModel.serializer.unflatten(state)
+    assert rect.center.x == 10 and rect.center.y == 20
+
+
+async def test_json_restore_error():
+    # Test save & restore of optional typed member with no value
+    rect = Rectangle(width=1, height=2)
+    state = JSONModel.serializer.flatten(rect)
+    state["width"] = "Not an int"
+    with pytest.raises(RestoreError) as exc_info:
+        await JSONModel.serializer.unflatten(state)
+    restore_error = exc_info.value
+    assert (
+        restore_error.field == "width"
+        and restore_error.cls is Rectangle
+        and isinstance(restore_error.exc, TypeError)
+    )

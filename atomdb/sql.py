@@ -60,6 +60,7 @@ from .base import (
     ModelManager,
     ModelMeta,
     ModelSerializer,
+    RestoreError,
     RestoreStateFn,
     ScopeType,
     StateType,
@@ -1934,11 +1935,14 @@ async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[
         If the pk is not None an instance of cls.
 
     """
-    if cls.__joined_pk__ in state and state[cls.__joined_pk__]:
+    cache = cls.objects.cache
+    if cls.__joined_pk__ in state and (joined_pk := state[cls.__joined_pk__]):
+        obj = cache.get(joined_pk)
+        if obj is not None:
+            return obj
         return await cls.restore(state)  # Restore from joined row result
     if not pk:
         return None
-    cache = cls.objects.cache
     obj = cache.get(pk)
     if obj is not None:
         return obj  # item is already in the cache
@@ -1986,6 +1990,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
     namespace: DictType[str, Any] = {
         "default_unflatten": default_unflatten,
         "get_cached_model": get_cached_model,
+        "RestoreError": RestoreError,
     }
 
     # The state dict may have data from multiple tables that have been joined
@@ -2048,7 +2053,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
                 # Only convert if the object has not already been restored
                 expr = "\n            ".join(
                     [
-                        f"if isinstance(v, rel_model_{f}):",
+                        f"if v is None or isinstance(v, rel_model_{f}):",
                         f"    self.{f} = v",
                         "else:",
                         f"    self.{f} = {obj}",
@@ -2067,21 +2072,20 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
             else:
                 expr = f"self.{f} = unflatten_{f}(v, scope)"
 
-        if on_error == "raise":
-            template.append(f"    {expr}")
+        if on_error == "ignore":
+            handler = "pass"
+        elif on_error == "log":
+            handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
         else:
-            if on_error == "log":
-                handler = f"self.__log_restore_error__(e, '{f}', state, scope)"
-            else:
-                handler = "pass"
-            template.extend(
-                [
-                    "    try:",
-                    f"        {expr}",
-                    "    except Exception as e:",
-                    f"        {handler}",
-                ]
-            )
+            handler = f"raise RestoreError('{f}', self.__class__, e) from e"
+        template.extend(
+            [
+                "    try:",
+                f"        {expr}",
+                "    except Exception as e:",
+                f"        {handler}",
+            ]
+        )
 
     # Update restored state
     template.append("self.__restored__ = True")

@@ -57,6 +57,9 @@ from atomdb.sql import (  # noqa: E402
     SQLModelManager,
 )
 
+#: Raise errors in tests
+SQLModel.__on_error__ = "raise"
+
 
 class AbstractUser(SQLModel):
     email = Str().tag(length=64)
@@ -95,8 +98,7 @@ class JobRole(SQLModel):
     skill = Instance(JobSkill)
     tasks = Relation(lambda: JobTask)
 
-    check_one_default = sa.schema.DDL(
-        """
+    check_one_default = sa.schema.DDL("""
         CREATE OR REPLACE FUNCTION check_one_default() RETURNS TRIGGER
         LANGUAGE plpgsql
         AS $$
@@ -107,15 +109,12 @@ class JobRole(SQLModel):
             END IF;
             RETURN NEW;
         END;
-        $$;"""
-    )
+        $$;""")
 
-    trigger = sa.schema.DDL(
-        """
+    trigger = sa.schema.DDL("""
         CREATE CONSTRAINT TRIGGER check_default_role AFTER INSERT OR UPDATE
         OF "default" ON "test_sql.JobRole"
-        FOR EACH ROW EXECUTE PROCEDURE check_one_default();"""
-    )
+        FOR EACH ROW EXECUTE PROCEDURE check_one_default();""")
 
     class Meta:
         triggers = [

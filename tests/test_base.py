@@ -24,6 +24,7 @@ from atomdb.base import (
     Model,
     ModelManager,
     ModelSerializer,
+    RestoreError,
     generate_function,
     is_db_field,
     is_primitive_member,
@@ -203,8 +204,10 @@ async def test_on_error_raise():
         __on_error__ = "raise"
         value = Int()
 
-    with pytest.raises(TypeError):
+    with pytest.raises(RestoreError) as exc_info:
         await A.restore({"value": "str"})
+    restore_error = exc_info.value
+    assert isinstance(restore_error.exc, TypeError)
 
 
 async def test_on_error_ignore():
@@ -226,6 +229,7 @@ async def test_on_error_log(caplog):
     """
 
     class C(Model):
+        __on_error__ = "log"
         old_field = Int()
         new_field = Int()
 
