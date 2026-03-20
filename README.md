@@ -17,7 +17,7 @@ but has been pulled out to a separate package.
 
 ### Overview
 
-- Supports MySQL and Postgres
+- Supports MySQL and Postgres (requires `sqlalchemy<2`)
 - Uses django like queries or raw sqlalchemy queries
 - Works with alembic database migrations
 - Supports MongoDB using motor
