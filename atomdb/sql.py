@@ -16,16 +16,19 @@ import logging
 import weakref
 from decimal import Decimal
 from inspect import iscoroutinefunction
-from typing import Any
-from typing import Callable as CallableType
-from typing import ClassVar
-from typing import Dict as DictType
-from typing import Generic, Iterator
-from typing import List as ListType
-from typing import Optional, Sequence
-from typing import Set as SetType
-from typing import Tuple as TupleType
-from typing import Type, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Generic,
+    Iterator,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import sqlalchemy as sa
 from atom import api
@@ -325,10 +328,10 @@ class Relation(ContainerList):
 
     def __init__(
         self,
-        item: CallableType[[], Type[Model]],
+        item: Callable[[], Type[Model]],
         default: Any = None,
         *,
-        through: CallableType[[], Optional[Type[Model]]] = lambda: None,
+        through: Callable[[], Optional[Type[Model]]] = lambda: None,
     ):
         super().__init__(ForwardInstance(item))  # type: ignore
         self._to: Optional[Type[Model]] = None
@@ -339,7 +342,7 @@ class Relation(ContainerList):
             api.PostGetAttr.MemberMethod_ObjectValue, "post_getattr"
         )
 
-    def post_getattr(self, obj: Model, value: ListType[Model]):
+    def post_getattr(self, obj: Model, value: list[Model]):
         """Rewrite the class to RelatedList which adds context dependent load and save methods to the list"""
         value.__class__ = self._cls
         return value
@@ -377,7 +380,7 @@ class RelatedTyped(ForwardTyped):
 def py_type_to_sql_column(
     model: Type[Model],
     member: Member,
-    types: Union[Type, TupleType[Type, ...]],
+    types: Union[Type, tuple[Type, ...]],
     **kwargs,
 ) -> TypeEngine:
     """Convert the python type to an alchemy table column type"""
@@ -431,7 +434,7 @@ def py_type_to_sql_column(
 @functools.lru_cache(1024)
 def resolve_member_column(
     model: Type["SQLModel"], field: str
-) -> TupleType[sa.Column, SetType[str]]:
+) -> tuple[sa.Column, set[str]]:
     """Get the sqlalchemy column for the given model and field.
 
     Parameters
@@ -510,7 +513,7 @@ def resolve_backref(model: Type["SQLModel"], through: Type["SQLModel"]) -> Membe
 @functools.lru_cache(1024)
 def resolve_relation(
     model: Type["SQLModel"], field: str
-) -> TupleType[Member, Type[Model], Member, sa.Column]:
+) -> tuple[Member, Type[Model], Member, sa.Column]:
     """Lookup a Relation.
 
     Parameters
@@ -795,7 +798,7 @@ def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
     return table
 
 
-def model_latest_by_field(Model: Type["SQLModel"]) -> TupleType[str]:
+def model_latest_by_field(Model: Type["SQLModel"]) -> tuple[str]:
     meta = getattr(Model, "Meta", None)
     get_latest_by = getattr(meta, "get_latest_by", None)
     if get_latest_by is None:
@@ -886,7 +889,7 @@ class SQLModelManager(ModelManager):
         binding = SQLBinding(manager=self)
         return sa.MetaData(binding, naming_convention=self.conventions)
 
-    def create_tables(self) -> DictType[Type["SQLModel"], sa.Table]:
+    def create_tables(self) -> dict[Type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
         tables = {}
         for cls in find_sql_models():
@@ -1105,7 +1108,7 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.scalar()
 
-    async def get_or_create(self, **filters) -> TupleType[T, bool]:
+    async def get_or_create(self, **filters) -> tuple[T, bool]:
         """Get or create a model matching the given criteria
 
         Parameters
@@ -1301,7 +1304,7 @@ class SQLQuerySet(Atom, Generic[T]):
     connection = Value()
 
     filter_clauses = List()
-    related_clauses = Set()
+    related_clauses = Set(str)
     prefetch_clauses = Set()
     join_type = Enum("inner", "outer", "full")
     order_clauses = List()
@@ -1312,7 +1315,7 @@ class SQLQuerySet(Atom, Generic[T]):
     force_restore = Bool()
 
     def clone(self, **kwargs) -> "SQLQuerySet[T]":
-        state: DictType[str, Any] = self.__getstate__()  # type: ignore
+        state: dict[str, Any] = self.__getstate__()  # type: ignore
         state.update(kwargs)
         return self.__class__(**state)
 
@@ -1512,7 +1515,7 @@ class SQLQuerySet(Atom, Generic[T]):
             groupby_clauses=groupby_clauses, related_clauses=related_clauses
         )
 
-    def where_clause(self, k: str, v: Any, related_clauses: SetType[str]):
+    def where_clause(self, k: str, v: Any, related_clauses: set[str]):
         """Create a where clause from a django-style parameter.
         This will modify the list of related clauses if a join occurs.
 
@@ -1553,7 +1556,7 @@ class SQLQuerySet(Atom, Generic[T]):
 
         return getattr(col, QUERY_OPS[op])(v)
 
-    def filter(self, *args, **kwargs: DictType[str, Any]) -> "SQLQuerySet[T]":
+    def filter(self, *args, **kwargs: dict[str, Any]) -> "SQLQuerySet[T]":
         """Filter the query by the given parameters. This accepts sqlalchemy
         filters by arguments and django-style parameters as kwargs.
 
@@ -1600,7 +1603,7 @@ class SQLQuerySet(Atom, Generic[T]):
             related_clauses=related_clauses,
         )
 
-    def exclude(self, *args, **kwargs: DictType[str, Any]) -> "SQLQuerySet[T]":
+    def exclude(self, *args, **kwargs: dict[str, Any]) -> "SQLQuerySet[T]":
         """Exclude results matching the given parameters by wrapping each
         clause in a NOT expression. This accepts sqlalchemy filters by
         arguments and django-style parameters as kwargs.
@@ -1828,13 +1831,13 @@ class SQLQuerySet(Atom, Generic[T]):
         force = self.force_restore
         return cast(T, await model.restore(row, force=force, prefetched=cache))
 
-    async def prefetch(self) -> Optional[DictType[Any, StateType]]:
+    async def prefetch(self) -> Optional[dict[Any, StateType]]:
         """Perform a prefetch lookup and populate the cache."""
         if not self.prefetch_clauses:
             return None
 
         # Cache is a mapping of this model's pk to related member field values
-        cache: DictType[Any, StateType] = {}
+        cache: dict[Any, StateType] = {}
 
         model = self.proxy.model
         sub_query = self.query("select", model.objects.table.c[model.__pk__])
@@ -2033,7 +2036,7 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
         setters.append((order, f, m, unflatten))
     setters.sort(key=lambda it: it[0])
 
-    namespace: DictType[str, Any] = {
+    namespace: dict[str, Any] = {
         "default_unflatten": default_unflatten,
         "get_cached_model": get_cached_model,
         "RestoreError": RestoreError,
@@ -2272,14 +2275,14 @@ class SQLModel(Model, metaclass=SQLMeta):
     __joined_pk__: ClassVar[str]
 
     #: Models which link back to this
-    __backrefs__: ClassVar[SetType[TupleType[Type[Model], Member]]]
+    __backrefs__: ClassVar[set[tuple[Type[Model], Member]]]
 
     #: List of fields which have been tagged with a different column name
     #: Mapping is class attr -> database column name.
-    __renamed_fields__: ClassVar[DictType[str, str]]
+    __renamed_fields__: ClassVar[dict[str, str]]
 
     #: Set of fields to exclude from the database
-    __excluded_fields__: ClassVar[SetType[str]]
+    __excluded_fields__: ClassVar[set[str]]
 
     #: Reference to the sqlalchemy table backing this model
     __table__: ClassVar[Optional[sa.Table]]
@@ -2302,7 +2305,7 @@ class SQLModel(Model, metaclass=SQLMeta):
         cls: Type[T],
         state: StateType,
         force: Optional[bool] = None,
-        prefetched: Optional[DictType[Any, StateType]] = None,
+        prefetched: Optional[dict[Any, StateType]] = None,
         **kwargs: Any,
     ) -> T:
         """Restore an object from the database using the primary key. Save
