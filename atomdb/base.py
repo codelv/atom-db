@@ -17,12 +17,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from inspect import iscoroutinefunction
 from pprint import pformat
-from typing import Any, Callable, ClassVar
-from typing import Dict as DictType
-from typing import List as ListType
-from typing import Optional
-from typing import Tuple as TupleType
-from typing import Type, TypeVar
+from typing import Any, Callable, ClassVar, Optional, Type, TypeVar
 from uuid import UUID
 
 from atom.api import (
@@ -48,8 +43,8 @@ from atom.api import (
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
-ScopeType = DictType[int, Any]
-StateType = DictType[str, Any]
+ScopeType = dict[int, Any]
+StateType = dict[str, Any]
 GetStateFn = Callable[[M, Optional[ScopeType]], StateType]
 RestoreStateFn = Callable[[M, StateType, Optional[ScopeType]], None]
 log = logging.getLogger("atomdb")
@@ -57,7 +52,7 @@ log = logging.getLogger("atomdb")
 PRIMITIVE_TYPES = (int, float, bool, str)
 
 
-def find_subclasses(cls: Type[T]) -> ListType[Type[T]]:
+def find_subclasses(cls: Type[T]) -> list[Type[T]]:
     """Finds subclasses of the given class"""
     classes = []
     for subclass in cls.__subclasses__():
@@ -130,7 +125,7 @@ def is_primitive_member(m: Member) -> Optional[bool]:
 
 def resolve_member_types(
     member: Member, resolve: bool = True
-) -> Optional[TupleType[type, ...]]:
+) -> Optional[tuple[type, ...]]:
     """Determine the validation types specified on a member.
 
     Parameters
@@ -166,7 +161,7 @@ def resolve_member_types(
     if isinstance(types, tuple):
         # Dict may have an member in the types list, so walk the types
         # and resolve all of those.
-        resolved: ListType[type] = []
+        resolved: list[type] = []
         for t in types:
             if isinstance(t, Member):
                 r = resolve_member_types(t, resolve)
@@ -204,7 +199,7 @@ class ModelSerializer(Atom):
     """
 
     #: Hold one instance per subclass for easy reuse
-    _instances: ClassVar[DictType[Type["ModelSerializer"], "ModelSerializer"]] = {}
+    _instances: ClassVar[dict[Type["ModelSerializer"], "ModelSerializer"]] = {}
 
     #: Store all registered models
     registry = Dict()
@@ -368,7 +363,7 @@ class ModelSerializer(Atom):
 
     async def get_or_create(
         self, cls: Type["Model"], state: Any, scope: ScopeType
-    ) -> TupleType["Model", bool]:
+    ) -> tuple["Model", bool]:
         """Get a cached object for this _id or create a new one. Subclasses
         should override this as needed to provide object caching if desired.
 
@@ -421,7 +416,7 @@ class ModelManager(Atom):
     """
 
     #: Stores instances of each class so we can easily reuse them if desired
-    _instances: ClassVar[DictType[Type["ModelManager"], "ModelManager"]] = {}
+    _instances: ClassVar[dict[Type["ModelManager"], "ModelManager"]] = {}
 
     @classmethod
     def instance(cls) -> "ModelManager":
@@ -560,7 +555,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
     on_error = cls.__on_error__
 
-    namespace: DictType[str, Any] = {
+    namespace: dict[str, Any] = {
         "default_unflatten": default_unflatten,
         "RestoreError": RestoreError,
     }
@@ -624,7 +619,7 @@ def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
 
 def generate_function(
     source: str,
-    namespace: DictType[str, Any],
+    namespace: dict[str, Any],
     fn_name: str,
 ) -> Callable[..., Any]:
     """Generate an optimized function
@@ -653,7 +648,7 @@ def generate_function(
     except Exception as e:
         raise RuntimeError(f"Could not generate code: {e}:\n{source}")
 
-    result: DictType[str, Any] = {}
+    result: dict[str, Any] = {}
     exec(code, namespace, result)
 
     # Optimize global access
@@ -701,7 +696,7 @@ class Model(Atom, metaclass=ModelMeta):
     __slots__ = "__weakref__"
 
     #: List of database field member names
-    __fields__: ClassVar[ListType[str]]
+    __fields__: ClassVar[list[str]]
 
     #: Table name used when saving into the database
     __model__: ClassVar[str]
@@ -822,7 +817,7 @@ class JSONSerializer(ModelSerializer):
             return None
         if isinstance(v, (date, datetime, time)):
             # This is inefficient space wise but still allows queries
-            s: DictType[str, Any] = {
+            s: dict[str, Any] = {
                 "__py__": f"{v.__class__.__module__}.{v.__class__.__name__}"
             }
             if isinstance(v, (date, datetime)):
@@ -850,7 +845,7 @@ class JSONSerializer(ModelSerializer):
             return {"__py__": type_name, "values": [flatten(it) for it in v]}
         return super().flatten(v, scope)
 
-    def flatten_object(self, obj: Model, scope: ScopeType) -> DictType[str, Any]:
+    def flatten_object(self, obj: Model, scope: ScopeType) -> dict[str, Any]:
         """Flatten to just json but add in keys to know how to restore it."""
         ref = id(obj)
         if ref in scope:
@@ -863,7 +858,7 @@ class JSONSerializer(ModelSerializer):
         """State should be contained in the dict"""
         return state
 
-    def _default_registry(self) -> DictType[str, Type[Model]]:
+    def _default_registry(self) -> dict[str, Type[Model]]:
         return {m.__model__: m for m in find_subclasses(JSONModel)}
 
 
