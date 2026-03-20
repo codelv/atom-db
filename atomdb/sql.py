@@ -34,6 +34,7 @@ from atom.api import (
     Bool,
     ContainerList,
     Dict,
+    Enum,
     ForwardInstance,
     ForwardSubclass,
     ForwardTyped,
@@ -51,6 +52,7 @@ from atom.catom import atomclist
 from sqlalchemy.engine import ddl
 from sqlalchemy.sql import schema
 from sqlalchemy.sql.elements import UnaryExpression
+from sqlalchemy.sql.expression import FromClause
 from sqlalchemy.sql.operators import asc_op, desc_op
 from sqlalchemy.sql.type_api import TypeEngine
 
@@ -1199,6 +1201,100 @@ class SQLTableProxy(Atom, Generic[T]):
         return getattr(qs, name)
 
 
+@functools.lru_cache(1024)
+def resolve_from_clause(
+    model: Type["SQLModel"], clauses: tuple[str], join_type: str = "inner"
+) -> tuple[set[sa.Table], FromClause, dict[Member, str]]:
+    """Generate a cached from clause starting at the given model using the set of django-style clauses.
+
+    Returns
+    -------
+    tables: set[sa.Table]
+        The set of tables being joined
+    from_clause: FromClause
+        The sql from clause generated
+    result_map: dict[str, str]
+        The mapping of aliases
+
+    """
+    root_model = model
+
+    from_table: sa.Table = root_model.__table__
+    tables = {from_table}
+    existing_joins = set()
+    result_map: dict[Member, str] = {}
+    for clause in clauses:
+        model = root_model
+        table: sa.Table = root_model.__table__
+
+        alias = []
+        for part in clause.split("__"):
+            m = model.members().get(part)
+            assert m is not None, f"{model} has no field {part}"
+            assert issubclass(model, SQLModel)
+
+            alias.append(part)
+            rel_model_types = resolve_member_types(m)
+            assert rel_model_types is not None
+            rel_model = rel_model_types[0]
+            assert issubclass(rel_model, SQLModel)
+            rel_table = rel_model.objects.table
+
+            # For example:
+            # class Job(SQLModel):
+            #    status = Str()
+            #    roles = Relation(Role)
+            # class Role(SQLModel):
+            #    name = Str()
+            #    job = Instance(Job)
+            if isinstance(m, Relation):
+                # Case when looking though the relation
+                # r = await Job.objects.filter(roles__name="foo")
+                backref = resolve_backref(model, m.through or rel_model)
+                rel_key = backref.name
+                self_key = model.__pk__
+            else:
+                # Normal foreign key cases or select related
+                # r = await JobRole.objects.filter(job__status="live")
+                rel_key = rel_model.__pk__
+                self_key = m.name
+
+            # Handled renamed fields
+            if self_key in model.__renamed_fields__:
+                self_key = model.__renamed_fields__[self_key]
+            if rel_key in rel_model.__renamed_fields__:
+                rel_key = rel_model.__renamed_fields__[rel_key]
+
+            join_key = (model, self_key, rel_model, rel_key)
+
+            # The join key is to Avoid duplicate join,
+            # eg `select_related('a', 'a__b")` would join on a twice.
+            if join_key not in existing_joins:
+                existing_joins.add(join_key)
+
+                if rel_table in tables:
+                    # Use an alias or joining on the same table twice causes an error
+                    alias_name = "__".join(alias) + "_"
+                    aliased_table = rel_table.alias(alias_name)
+                    result_map[m] = alias_name
+                else:
+                    aliased_table = rel_table
+
+                from_table = from_table.join(
+                    aliased_table,
+                    onclause=table.c[self_key] == aliased_table.c[rel_key],
+                    isouter=join_type == "outer",
+                    full=join_type == "full",
+                )
+                tables.add(aliased_table)
+            else:
+                # Join already exists
+                aliased_table = rel_table
+            table = aliased_table
+            model = rel_model
+    return tables, from_table, result_map
+
+
 class SQLQuerySet(Atom, Generic[T]):
     #: Proxy
     proxy = Instance(SQLTableProxy, optional=False)
@@ -1207,7 +1303,7 @@ class SQLQuerySet(Atom, Generic[T]):
     filter_clauses = List()
     related_clauses = Set()
     prefetch_clauses = Set()
-    outer_join = Bool()
+    join_type = Enum("inner", "outer", "full")
     order_clauses = List()
     groupby_clauses = List()
     distinct_clauses = Set()
@@ -1224,70 +1320,18 @@ class SQLQuerySet(Atom, Generic[T]):
         if kwargs:
             return self.filter(**kwargs).query(query_type)
         p = self.proxy
-        from_table = p.table
-        tables = {from_table}
-        use_labels = bool(self.related_clauses)
-        outer_join = self.outer_join
-        existing_joins = set()
-        for clause in self.related_clauses:
-            model = p.model
-            table = p.table
 
-            # Walk the fk relations
-            alias = []
-            for part in clause.split("__"):
-                m = model.members().get(part)
-                assert m is not None, f"{model} has no field {part}"
-                assert issubclass(model, SQLModel)
-
-                alias.append(part)
-                rel_model_types = resolve_member_types(m)
-                assert rel_model_types is not None
-                rel_model = rel_model_types[0]
-                assert issubclass(rel_model, SQLModel)
-                rel_table = rel_model.objects.table
-
-                # For example:
-                # class Job(SQLModel):
-                #    status = Str()
-                #    roles = Relation(Role)
-                # class Role(SQLModel):
-                #    name = Str()
-                #    job = Instance(Job)
-                if isinstance(m, Relation):
-                    # Case when looking though the relation
-                    # r = await Job.objects.filter(roles__name="foo")
-                    backref = resolve_backref(model, m.through or rel_model)
-                    rel_key = backref.name
-                    self_key = model.__pk__
-                else:
-                    # Normal foreign key cases or select related
-                    # r = await JobRole.objects.filter(job__status="live")
-                    rel_key = rel_model.__pk__
-                    self_key = m.name
-
-                # Handled renamed fields
-                if self_key in model.__renamed_fields__:
-                    self_key = model.__renamed_fields__[self_key]
-                if rel_key in rel_model.__renamed_fields__:
-                    rel_key = rel_model.__renamed_fields__[rel_key]
-
-                join_key = (model, self_key, rel_model, rel_key)
-
-                # Avoid duplicate join, eg `select_related('a', 'a__b")`
-                # would join on a twice.
-                # TODO: Cannot join the same table twice, need to use alias
-                # where `select_related('a__b', 'a__b")`
-                if join_key not in existing_joins:
-                    onclause = table.c[self_key] == rel_table.c[rel_key]
-                    from_table = from_table.join(
-                        rel_table, onclause=onclause, isouter=outer_join
-                    )
-                    existing_joins.add(join_key)
-
-                tables.add(rel_table)
-                model = rel_model
-                table = rel_table
+        if related_clauses := self.related_clauses:
+            join_type = self.join_type
+            use_labels = True
+            tables, from_table, result_map = resolve_from_clause(
+                p.model, tuple(related_clauses), join_type
+            )
+        else:
+            use_labels = False
+            from_table = p.table
+            result_map = None
+            tables = {from_table}
 
         if query_type == "select":
             q = sa.select(columns or tables, use_labels=use_labels).select_from(
@@ -1300,27 +1344,28 @@ class SQLQuerySet(Atom, Generic[T]):
         else:
             raise ValueError("Unsupported query type")
 
-        if self.distinct_clauses:
-            q = q.distinct(*self.distinct_clauses)
+        if distinct_clauses := self.distinct_clauses:
+            q = q.distinct(*distinct_clauses)
 
-        if self.filter_clauses:
-            if len(self.filter_clauses) == 1:
-                q = q.where(self.filter_clauses[0])
+        if filter_clauses := self.filter_clauses:
+            if len(filter_clauses) == 1:
+                q = q.where(filter_clauses[0])
             else:
-                q = q.where(sa.and_(*self.filter_clauses))
+                q = q.where(sa.and_(*filter_clauses))
 
-        if self.order_clauses:
-            q = q.order_by(*self.order_clauses)
+        if order_clauses := self.order_clauses:
+            q = q.order_by(*order_clauses)
 
-        if self.limit_count:
-            q = q.limit(self.limit_count)
+        if limit_count := self.limit_count:
+            q = q.limit(limit_count)
 
-        if self.query_offset:
-            q = q.offset(self.query_offset)
+        if query_offset := self.query_offset:
+            q = q.offset(query_offset)
 
-        if self.groupby_clauses:
-            q = q.group_by(*self.groupby_clauses)
+        if groupby_clauses := self.groupby_clauses:
+            q = q.group_by(*groupby_clauses)
 
+        q.result_map = result_map
         return q
 
     def select_related(
@@ -1343,7 +1388,7 @@ class SQLQuerySet(Atom, Generic[T]):
         """
         return self.clone(
             related_clauses=self.related_clauses | set(related),
-            outer_join=self.outer_join if outer_join is None else outer_join,
+            join_type=self.join_type if outer_join is None else "outer",
         )
 
     def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":

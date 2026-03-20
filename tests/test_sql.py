@@ -267,6 +267,20 @@ class NodeType(SQLModel):
     default_node = Instance(Node).tag(use_alter=True, ondelete="SET NULL")
 
 
+class Engineer(SQLModel):
+    id = Int().tag(primary_key=True)
+    name = Str().tag(length=20)
+
+
+class Design(SQLModel):
+    """Model that has two fk to the same table"""
+
+    id = Int().tag(primary_key=True)
+    name = Str().tag(length=20)
+    author = Typed(Engineer)
+    verifier = Typed(Engineer)
+
+
 def test_build_tables():
     # Trigger table creation
     SQLModelManager.instance().create_tables()
@@ -1490,13 +1504,52 @@ async def test_query_multiple_joins(db):
     assert jobs == [cfo, swe]
 
 
+@pytest.mark.xfail
+async def test_query_multiple_fk_same_table(db):
+    await reset_tables(Engineer, Design)
+    bob = await Engineer.objects.create(name="Bob")
+    john = await Engineer.objects.create(name="John")
+    sarah = await Engineer.objects.create(name="Sarah")
+    alex = await Engineer.objects.create(name="Alex")
+
+    await Design.objects.create(name="PCB1", author=bob)
+    await Design.objects.create(name="PCB2", author=sarah, verifier=john)
+    await Design.objects.create(name="PCB3", author=sarah, verifier=alex)
+
+    # Wipe caches
+    del bob, john, sarah, alex
+    Engineer.objects.cache.clear()
+    Design.objects.cache.clear()
+    gc.collect()
+
+    assert await Design.objects.count() == 3
+
+    designs = (
+        await Design.objects.select_related("author", "verifier", outer_join=True)
+        .order_by("name")
+        .all()
+    )
+
+    assert len(designs) == 3
+    assert designs[0].name == "PCB1"
+    assert designs[0].author.name == "Bob"
+    assert designs[0].verifier is None
+
+    assert designs[1].name == "PCB2"
+    assert designs[1].author.name == "Sarah"
+    assert designs[1].verifier.name == "John"
+
+    assert designs[2].name == "PCB3"
+    assert designs[2].author.name == "Bob"
+    assert designs[2].verifier.name == "Alex"
+
+
 async def test_save_update_fields(db):
     """Test that using save with update_fields only updates the fields
     specified
 
     """
-    await reset_tables(User)
-    await reset_tables(Page)
+    await reset_tables(User, Page)
 
     page = await Page.objects.create(
         title="Test", body="This is only a test", status="live"
