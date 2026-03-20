@@ -235,7 +235,7 @@ def test_benchmark_filter_raw_row(db, benchmark):
 @pytest.mark.benchmark(group="sql-build-query")
 def test_benchmark_filter_related_query(db, benchmark):
     def query():
-        Page.objects.filter(author__name="Tom", status="live")
+        Page.objects.filter(author__name="Tom", status="live").query("select")
 
     benchmark(query)
 
@@ -243,7 +243,7 @@ def test_benchmark_filter_related_query(db, benchmark):
 @pytest.mark.benchmark(group="sql-build-query")
 def test_benchmark_filter_query(db, benchmark):
     def query():
-        Page.objects.filter(status="live")
+        Page.objects.filter(status="live").query("select")
 
     benchmark(query)
 
@@ -251,6 +251,6 @@ def test_benchmark_filter_query(db, benchmark):
 @pytest.mark.benchmark(group="sql-build-query")
 def test_benchmark_filter_query_ordered(db, benchmark):
     def query():
-        Page.objects.filter(status="live").order_by("last_updated")
+        Page.objects.filter(status="live").order_by("last_updated").query("select")
 
     benchmark(query)
