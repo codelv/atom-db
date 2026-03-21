@@ -1351,10 +1351,7 @@ class SQLQuerySet(Atom, Generic[T]):
             q = q.distinct(*distinct_clauses)
 
         if filter_clauses := self.filter_clauses:
-            if len(filter_clauses) == 1:
-                q = q.where(filter_clauses[0])
-            else:
-                q = q.where(sa.and_(*filter_clauses))
+            q = q.where(*filter_clauses)
 
         if order_clauses := self.order_clauses:
             q = q.order_by(*order_clauses)
