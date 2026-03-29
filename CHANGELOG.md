@@ -1,3 +1,10 @@
+# 0.9.0
+- Refactor sql models to use cached query strings to speed up create, save, and delete
+- Add `Q` class that supports doing or queries with multiple and conditions
+- Slightly speed up query building
+- **Breaking** Exclude behavior has changed to match django. All exclude parameters are first joined 
+with AND and then the final clause use wrapped with NOT. To use the old behavior use a `Q` object with a `|` to do an or.
+
 # 0.8.5
 
 - Fix error that would occur when restoring optional Typed member with no value

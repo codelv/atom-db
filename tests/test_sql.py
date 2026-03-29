@@ -55,6 +55,7 @@ from atomdb.sql import (  # noqa: E402
     Relation,
     SQLModel,
     SQLModelManager,
+    Q
 )
 
 #: Raise errors in tests
@@ -330,7 +331,7 @@ def test_sanity_relation_exluded():
     class Parent(SQLModel):
         children = Relation(lambda: Child)
 
-    assert "children" in Parent.__excluded_fields__
+    assert "children" not in Parent.__db_fields__
 
 
 async def test_sanity_flatten_unflatten():
@@ -555,6 +556,44 @@ async def test_query(db):
     # Delete them all
     await User.objects.delete(active=True)
     assert len(await User.objects.all()) == 0
+
+
+async def test_query_or(db):
+    await reset_tables(User)
+    bob = await User.objects.create(name="Bob", email="bob@example.com", active=True)
+    jill = await User.objects.create(name="Jill", email="jill@foobar.com", active=False)
+    alice = await User.objects.create(name="Alice", email="alice@foobar.com", active=True)
+
+    users = await User.objects.filter(Q(name="Bob") | Q(name="Jill"))
+    assert len(users) == 2
+    assert bob in users and jill in users
+
+    users = await User.objects.filter(Q(name="Jill") | Q(email__endswith="foobar.com"))
+    assert len(users) == 2
+    assert bob not in users
+    assert jill in users and alice in users
+
+
+async def test_query_is_not_modified(db):
+    await reset_tables(User)
+    bob = await User.objects.create(name="Bob", email="bob@example.com", active=True)
+    jill = await User.objects.create(name="Jill", email="jill@foobar.com", active=False)
+    alice = await User.objects.create(name="Alice", email="alice@foobar.com", active=True)
+
+    q = User.objects.filter(active=True)
+    users = await q
+    assert len(users) == 2
+    assert bob in users and alice in users
+
+    q2 = q.filter(email__endswith="example.com")
+    users = await q2
+    assert len(users) == 1
+    assert users[0] == bob
+
+    # Make sure original query still returns the same
+    users = await q
+    assert len(users) == 2
+    assert bob in users and alice in users
 
 
 async def test_query_related(db):
@@ -1320,11 +1359,11 @@ async def test_filters(db):
     assert len(users) == 1 and users[0].age == 48
 
     # Or query
-    users = await User.objects.filter(dict(age__lt=18, age__gt=40))
+    users = await User.objects.filter(Q(age__lt=18) | Q(age__gt=40))
     assert len(users) == 1 and users[0].age == 48
 
     # Exclude or
-    users = await User.objects.exclude(dict(age__lt=18, age__gt=40))
+    users = await User.objects.exclude(Q(age__lt=18) | Q(age__gt=40))
     assert len(users) == 1 and users[0].age == 21
 
     # Not supported
@@ -1354,7 +1393,7 @@ async def test_filter_exclude(db):
     )
     assert len(users) == 1 and users[0].email == "bob@company.com"
 
-    users = await User.objects.exclude(active=True, age__lt=25)
+    users = await User.objects.exclude(Q(active=True) | Q(age__lt=25))
     assert len(users) == 1 and users[0].name == "Jack"
 
     users = await User.objects.exclude(name="Bob")
@@ -1609,9 +1648,10 @@ async def test_save_errors(db):
         # Cant do both
         await u.save(force_insert=True, force_update=True)
 
-    # Updating unsaved will not work
-    r = await u.save(force_update=True)
-    assert r.rowcount == 0
+    # Updating unsaved will not work. In atomdb 0.9+ it raises a KeyError because
+    # the pk key is empty.
+    with pytest.raises(KeyError):
+        r = await u.save(force_update=True)
 
 
 async def test_object_caching(db):

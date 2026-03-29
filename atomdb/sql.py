@@ -45,9 +45,11 @@ from atom.api import (
     Int,
     List,
     Member,
+    Property,
     Set,
     Str,
     Typed,
+    Tuple,
     Validate,
     Value,
 )
@@ -58,6 +60,8 @@ from sqlalchemy.sql.elements import UnaryExpression
 from sqlalchemy.sql.expression import FromClause
 from sqlalchemy.sql.operators import asc_op, desc_op
 from sqlalchemy.sql.type_api import TypeEngine
+from sqlalchemy import and_, or_, not_
+
 
 from .base import (
     JSONModel,
@@ -175,6 +179,23 @@ log = logging.getLogger("atomdb.sql")
 
 QueryType = Union[str, sa.sql.expression.Executable]
 T = TypeVar("T", bound="SQLModel")
+
+
+class Q(Atom):
+    """ A Query dict that supports the pipe | operator to perform an OR query. """
+    clauses = Tuple(dict)
+
+    def __init__(self, **kwargs):
+        if not kwargs:
+            raise ValueError("At least one Query is required")
+        super().__init__(clauses=(kwargs,))
+
+    def __or__(self, other):
+        if not isinstance(other, Q):
+            raise TypeError("Q can only be joined with another Q")
+        copy = Q.__new__(Q)
+        copy.clauses = self.clauses + other.clauses
+        return copy
 
 
 def find_sql_models() -> Iterator[Type["SQLModel"]]:
@@ -889,28 +910,39 @@ class SQLModelManager(ModelManager):
         binding = SQLBinding(manager=self)
         return sa.MetaData(binding, naming_convention=self.conventions)
 
+    def _observe_database(self, change):
+        """ The generated function depends on the database dialect, so regenerate """
+        if self.database:
+            for cls in find_sql_models():
+                if cls.__table__ is not None:
+                    self.regenerate_code(cls)
+
     def create_tables(self) -> dict[Type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
         tables = {}
         for cls in find_sql_models():
             table = cls.__table__
             if table is None:
-                table = self.create_table_and_restore_fn(cls)
+                table = self.initalize_model(cls)
             if not table.metadata.bind:
                 table.metadata.bind = SQLBinding(manager=self, table=table)
             tables[cls] = table
         return tables
 
-    def create_table_and_restore_fn(self, cls: Type["SQLModel"]) -> sa.Table:
-        """Generate the sqlalchemy table and optimized restore function.
-        This is done here to make sure that foreign and forwarded members
-        are now resolved.
-
+    def initalize_model(self, cls: Type["SQLModel"]) -> sa.Table:
+        """ Create the table for the model. If the database is already defined also
+        generate the code for them.
         """
         assert cls.__table__ is None
         table = cls.__table__ = create_table(cls, self.metadata)
-        cls.__generated_restorestate__ = generate_sql_restorestate(cls)
+        if self.get_member("database").get_slot(self) is not None:
+            self.regenerate_code(cls)
         return table
+
+    def regenerate_code(self, cls: Type["SQLModel"]):
+        """ Regenerate the optimized load/restore functions for the model """
+        cls.__generated_restorestate__ = generate_sql_restorestate(cls)
+        cls.__generated_getdbstate__ = generate_sql_getdbstate(cls)
 
     def __get__(
         self, obj: T, cls: Optional[Type[T]] = None
@@ -923,7 +955,7 @@ class SQLModelManager(ModelManager):
         if proxy is None:
             table = cls.__table__
             if table is None:
-                table = self.create_table_and_restore_fn(cls)
+                table = self.initalize_model(cls)
             proxy = self.proxies[cls] = SQLTableProxy(table=table, model=cls)
         return proxy
 
@@ -964,6 +996,62 @@ class SQLTableProxy(Atom, Generic[T]):
 
     #: Key used to pass the force restore option
     restore_kwarg = Str("force_restore")
+
+    #: Compiled insert query that generates a new pk
+    def _get_insert_query(self):
+        table = self.table
+        model = self.model
+        values = {
+            k: sa.bindparam(k)
+            for k in model.__db_fields__
+            if k != model.__pk__
+        }
+        q = table.insert().values(**values)
+        return str(q.compile(dialect=self.engine.dialect))
+    insert_query = Property(_get_insert_query, cached=True)
+
+    #: Compiled insert query that uses a pre-created pk
+    #: This is used for force inserting
+    def _get_force_insert_query(self):
+        table = self.table
+        model = self.model
+        values = {k: sa.bindparam(k) for k in model.__db_fields__}
+        q = table.insert().values(**values)
+        return str(q.compile(dialect=self.engine.dialect))
+    force_insert_query = Property(_get_force_insert_query, cached=True)
+
+    #: Compiled update query that updates all fields
+    def _get_update_query(self):
+        table = self.table
+        model = self.model
+        values = {
+            k: sa.bindparam(k)
+            for k in model.__db_fields__
+        }
+        q = table.update().where(
+            table.c[model.__pk__]==sa.bindparam(model.__pk__)
+        ).values(**values)
+        return str(q.compile(dialect=self.engine.dialect))
+
+    update_query = Property(_get_update_query, cached=True)
+
+    #: Compiled delete query
+    def _get_delete_query(self):
+        table = self.table
+        model = self.model
+        q = table.delete().where(table.c[model.__pk__]==sa.bindparam("pk"))
+        return str(q.compile(dialect=self.engine.dialect))
+
+    delete_query = Property(_get_delete_query, cached=True)
+
+    #: Compiled select query
+    def _get_select_query(self):
+        table = self.table
+        model = self.model
+        q = table.select().where(table.c[model.__pk__]==sa.bindparam("pk"))
+        return str(q.compile(dialect=self.engine.dialect))
+
+    select_query = Property(_get_select_query, cached=True)
 
     #: Reference to the aiomysql or aiopg Engine
     #: This is used to get a connection from the connection pool.
@@ -1035,6 +1123,8 @@ class SQLTableProxy(Atom, Generic[T]):
         ----------
         query: String or Query
             The query to execute
+        args: tuple or None
+            The query arguments
         connection: Database connection
             The connection to use or a new one will be created
 
@@ -1048,7 +1138,7 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.fetchall()
 
-    async def fetchmany(self, query, size: Optional[int] = None, connection=None):
+    async def fetchmany(self, query: QueryType, size: Optional[int] = None, connection=None):
         """Fetch size results for the query.
 
         Parameters
@@ -1070,13 +1160,15 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.fetchmany(size)
 
-    async def fetchone(self, query: QueryType, connection=None):
+    async def fetchone(self, query: QueryType, params: Optional[dict] = None, connection=None):
         """Fetch a single result for the query.
 
         Parameters
         ----------
         query: String or Query
             The query to execute
+        params: Query parameters
+            The query parameters
         connection: Database connection
             The connection to use or a new one will be created
 
@@ -1086,7 +1178,10 @@ class SQLTableProxy(Atom, Generic[T]):
             The row returned or None
         """
         async with self.connection(connection) as conn:
-            r = await conn.execute(query)
+            if params is None:
+                r = await conn.execute(query)
+            else:
+                r = await conn.execute(query, params)
             return await r.fetchone()
 
     async def scalar(self, query: QueryType, connection=None):
@@ -1174,28 +1269,37 @@ class SQLTableProxy(Atom, Generic[T]):
             The items passed in. Only postgres will populate the primary keys.
 
         """
-        table = self.table
-        values = [item.__prepare_state_for_db__() for item in items]
-        if not values:
+        if not items:
             return items
+        values = [item.__getdbstate__() for item in items]
         async with self.connection(connection) as conn:
-            # TODO: Properly detect?
-            postgres = "aiopg" in conn.__class__.__module__
-            if postgres:
-                pk_column = table.c[self.model.__pk__]
-                q = table.insert().returning(pk_column).values(values)
-            else:
-                # TODO: Get return value?
-                q = table.insert().values(values)
+            table = self.table
 
-            result = await conn.execute(q)
-            if postgres:
+            # TODO: Properly detect?
+            if "pg" in conn.__class__.__module__:
+                # TODO: Support executemany
+                q = table.insert().returning(table.c[self.model.__pk__]).values(values)
+                cursor = await conn.execute(q)
                 cache = self.cache
-                for r, item in zip(await result.fetchall(), items):
+                for r, item in zip(await cursor.fetchall(), items):
                     # Don't overwrite if force inserting
                     if not item._id:
                         item._id = r[0]
                     cache[item._id] = item
+            else:
+                # TODO: Get return value?
+                q = table.insert().values(values)
+                cursor = await conn.execute(q)
+                if hasattr(cursor, "lastrowid"):
+                    lastrowid = cursor.lastrowid
+                    for item in items:
+                        # Don't overwrite if force inserting
+                        if not item._id:
+                            item._id = lastrowid
+                        cache[item._id] = item
+                        lastrowid -= 1
+
+
             return items
 
     def __getattr__(self, name: str):
@@ -1298,6 +1402,52 @@ def resolve_from_clause(
     return tables, from_table, result_map
 
 
+@functools.lru_cache(1024)
+def resolve_column_operator(model: Type["SQLModel"], query: str) -> tuple[ColumnOperators, set[str]]:
+    """Create a where clause from a django-style parameter.
+    This will modify the list of related clauses if a join occurs.
+
+    Parameters
+    ----------
+    model: type[SQLModel]
+        The model class
+    query: str
+        The filter key, eg name__startswith
+
+    Returns
+    -------
+    result: tuple[ColumnOperators, set[str]]
+        The column operator and the set of related clauses needed
+
+    """
+    field, *maybe_op = query.rsplit("__", 1)
+    if maybe_op and maybe_op[0] in QUERY_OPS:
+        op = maybe_op[0]
+        query = field
+    else:
+        op = "eq"
+    col, new_clauses = resolve_member_column(model, query)
+    return getattr(col, QUERY_OPS[op]), new_clauses
+
+
+def build_filter(model: "SQLModel", query: dict[str, Any], related_clauses: set[str]):
+    scope = {}
+    clauses = []
+    for k, v in query.items():
+        op, new_clauses = resolve_column_operator(model, k)
+        related_clauses.update(new_clauses)
+        # Support lookups by model
+        if isinstance(v, Model):
+            v = v.serializer.flatten_object(v, scope)
+        elif isinstance(v, enum.Enum):
+            v = v.value
+        elif isinstance(v, (list, tuple, set)):
+            # Flatten lists when using in or notin ops
+            v = model.serializer.flatten(v, scope)
+        clauses.append(op(v))
+    return and_(*clauses)
+
+
 class SQLQuerySet(Atom, Generic[T]):
     #: Proxy
     proxy = Instance(SQLTableProxy, optional=False)
@@ -1314,10 +1464,9 @@ class SQLQuerySet(Atom, Generic[T]):
     query_offset = Int()
     force_restore = Bool()
 
-    def clone(self, **kwargs) -> "SQLQuerySet[T]":
-        state: dict[str, Any] = self.__getstate__()  # type: ignore
-        state.update(kwargs)
-        return self.__class__(**state)
+    def clone(self) -> "SQLQuerySet[T]":
+        """ Create a clone of the object """
+        return self.__class__(**self.__getstate__())
 
     def query(self, query_type: str = "select", *columns, **kwargs):
         if kwargs:
@@ -1386,10 +1535,11 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the related field terms added.
 
         """
-        return self.clone(
-            related_clauses=self.related_clauses | set(related),
-            join_type=self.join_type if outer_join is None else "outer",
-        )
+        copy = self.clone()
+        copy.related_clauses.update(related)
+        if outer_join is True:
+            copy.join_type = "outer"
+        return copy
 
     def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
         """Define related fields to prefetch in a separate query.
@@ -1408,7 +1558,9 @@ class SQLQuerySet(Atom, Generic[T]):
         # Validate relations
         for r in related:
             assert resolve_relation(self.proxy.model, r)
-        return self.clone(prefetch_clauses=self.prefetch_clauses | set(related))
+        copy = self.clone()
+        copy.prefetch_clauses.update(related)
+        return copy
 
     def order_by(self, *args, reverse: bool = False) -> "SQLQuerySet[T]":
         """Order the query by the given fields.
@@ -1426,8 +1578,9 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the ordering terms added.
 
         """
-        order_clauses = self.order_clauses[:]
-        related_clauses = self.related_clauses.copy()
+        copy = self.clone()
+        order_clauses = copy.order_clauses
+        related_clauses = copy.related_clauses
         model = self.proxy.model
         for arg in args:
             if isinstance(arg, str):
@@ -1452,7 +1605,7 @@ class SQLQuerySet(Atom, Generic[T]):
                 clause = reverse_order_clause(clause)
             if clause not in order_clauses:
                 order_clauses.append(clause)
-        return self.clone(order_clauses=order_clauses, related_clauses=related_clauses)
+        return copy
 
     def distinct(self, *args) -> "SQLQuerySet[T]":
         """Apply distinct on the given column.
@@ -1468,8 +1621,9 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the distinct terms added.
 
         """
-        distinct_clauses = self.distinct_clauses.copy()
-        related_clauses = self.related_clauses.copy()
+        copy = self.clone()
+        distinct_clauses = copy.distinct_clauses
+        related_clauses = copy.related_clauses
         model = self.proxy.model
         for arg in args:
             if isinstance(arg, str):
@@ -1479,9 +1633,7 @@ class SQLQuerySet(Atom, Generic[T]):
             else:
                 clause = arg
             distinct_clauses.add(clause)
-        return self.clone(
-            distinct_clauses=distinct_clauses, related_clauses=related_clauses
-        )
+        return copy
 
     def group_by(self, *args) -> "SQLQuerySet[T]":
         """Apply group by on the given column.
@@ -1497,8 +1649,9 @@ class SQLQuerySet(Atom, Generic[T]):
             A clone of this queryset with the group by terms added.
 
         """
-        groupby_clauses = self.groupby_clauses.copy()
-        related_clauses = self.related_clauses.copy()
+        copy = self.clone()
+        groupby_clauses = copy.groupby_clauses
+        related_clauses = copy.related_clauses
         model = self.proxy.model
         for arg in args:
             if isinstance(arg, str):
@@ -1508,54 +1661,12 @@ class SQLQuerySet(Atom, Generic[T]):
             else:
                 clause = arg
             groupby_clauses.append(clause)
-        return self.clone(
-            groupby_clauses=groupby_clauses, related_clauses=related_clauses
-        )
-
-    def where_clause(self, k: str, v: Any, related_clauses: set[str]):
-        """Create a where clause from a django-style parameter.
-        This will modify the list of related clauses if a join occurs.
-
-        Parameters
-        ----------
-        k: str
-            The filter key, eg name__startswith
-        v: object
-            The value
-        related_clauses: set[str]
-            Set of related clauses needed
-
-        Returns
-        -------
-        clause: sqlalchemy.sq.expression
-            The filter clause
-
-        """
-        model = self.proxy.model
-        op = "eq"
-        if "__" in k:
-            field, maybe_op = k.rsplit("__", 1)
-            if maybe_op in QUERY_OPS:
-                op = maybe_op
-                k = field
-
-        col, new_clauses = resolve_member_column(model, k)
-        related_clauses.update(new_clauses)
-
-        # Support lookups by model
-        if isinstance(v, Model):
-            v = v.serializer.flatten_object(v, scope={})
-        elif isinstance(v, enum.Enum):
-            v = v.value
-        elif op in ("in", "notin"):
-            # Flatten lists when using in or notin ops
-            v = model.serializer.flatten(v, scope={})
-
-        return getattr(col, QUERY_OPS[op])(v)
+        return copy
 
     def filter(self, *args, **kwargs: dict[str, Any]) -> "SQLQuerySet[T]":
-        """Filter the query by the given parameters. This accepts sqlalchemy
-        filters by arguments and django-style parameters as kwargs.
+        """Filter the query by the given parameters. Multiple parameters are joined
+        via AND in the underlying SQL statement. This accepts sqlalchemy filters
+        by arguments and django-style parameters as kwargs.
 
         Parameters
         ----------
@@ -1571,39 +1682,32 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         p = self.proxy
-        filter_clauses = self.filter_clauses[:]
-        related_clauses = self.related_clauses.copy()
-
-        connection_kwarg = p.connection_kwarg
-        restore_kwarg = p.restore_kwarg
+        copy = self.clone()
+        filter_clauses = copy.filter_clauses
+        related_clauses = copy.related_clauses
 
         # Build filter
         for arg in args:
-            if isinstance(arg, dict):
-                or_clause = sa.or_(
-                    *[self.where_clause(k, v, related_clauses) for k, v in arg.items()]
-                )
-                filter_clauses.append(or_clause)
+            if isinstance(arg, Q):
+                filter_clauses.append(or_(
+                    *(
+                        build_filter(p.model, query, related_clauses) for query in arg.clauses
+                    )
+                ))
             else:
                 filter_clauses.append(arg)
 
-        # Build the filter operations
-        for k, v in kwargs.items():
-            if k == connection_kwarg or k == restore_kwarg:
-                continue
-            filter_clauses.append(self.where_clause(k, v, related_clauses))
+        if kwargs:
+            copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
+            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
+            filter_clauses.append(build_filter(p.model, kwargs, related_clauses))
 
-        return self.clone(
-            connection=kwargs.get(connection_kwarg, self.connection),
-            force_restore=kwargs.get(restore_kwarg, self.force_restore),
-            filter_clauses=filter_clauses,
-            related_clauses=related_clauses,
-        )
+        return copy
 
     def exclude(self, *args, **kwargs: dict[str, Any]) -> "SQLQuerySet[T]":
-        """Exclude results matching the given parameters by wrapping each
-        clause in a NOT expression. This accepts sqlalchemy filters by
-        arguments and django-style parameters as kwargs.
+        """Exclude results matching the given parameters. Multiple parameters are
+        joined via AND in the underlying SQL statement, and the whole thing is enclosed in a NOT().
+        This accepts sqlalchemy filters by arguments and django-style parameters as kwargs.
 
         Parameters
         ----------
@@ -1619,35 +1723,28 @@ class SQLQuerySet(Atom, Generic[T]):
 
         """
         p = self.proxy
-        filter_clauses = self.filter_clauses[:]
-        related_clauses = self.related_clauses.copy()
-
-        connection_kwarg = p.connection_kwarg
-        restore_kwarg = p.restore_kwarg
+        copy = self.clone()
+        filter_clauses = copy.filter_clauses
+        related_clauses = copy.related_clauses
 
         # Build filter
         for arg in args:
-            if isinstance(arg, dict):
-                or_clause = sa.or_(
-                    *[self.where_clause(k, v, related_clauses) for k, v in arg.items()]
+            if isinstance(arg, Q):
+                clause = or_(
+                    *(
+                        build_filter(p.model, query, related_clauses) for query in arg.clauses
+                    )
                 )
-                filter_clauses.append(sa.not_(or_clause))
             else:
-                filter_clauses.append(sa.not_(arg))
+                clause = arg
+            filter_clauses.append(not_(clause))
 
         # Build the filter operations
-        for k, v in kwargs.items():
-            if k == connection_kwarg or k == restore_kwarg:
-                continue
-            clause = self.where_clause(k, v, related_clauses)
-            filter_clauses.append(sa.not_(clause))
-
-        return self.clone(
-            connection=kwargs.get(connection_kwarg, self.connection),
-            force_restore=kwargs.get(restore_kwarg, self.force_restore),
-            filter_clauses=filter_clauses,
-            related_clauses=related_clauses,
-        )
+        if kwargs:
+            copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
+            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
+            filter_clauses.append(not_(build_filter(p.model, kwargs, related_clauses)))
+        return copy
 
     def __getitem__(self, key: Union[int, slice]) -> "SQLQuerySet[T]":
         if isinstance(key, slice):
@@ -1662,13 +1759,20 @@ class SQLQuerySet(Atom, Generic[T]):
             raise ValueError("Cannot use a negative offset")
         if limit < 0:
             raise ValueError("Cannot use a negative limit")
-        return self.clone(limit_count=limit, query_offset=offset)
+        copy = self.clone()
+        copy.limit_count = limit
+        copy.query_offset = offset
+        return copy
 
     def limit(self, limit: int) -> "SQLQuerySet[T]":
-        return self.clone(limit_count=limit)
+        copy = self.clone()
+        copy.limit_count = limit
+        return copy
 
     def offset(self, offset: int) -> "SQLQuerySet[T]":
-        return self.clone(query_offset=offset)
+        copy = self.clone()
+        copy.query_offset = offset
+        return copy
 
     # -------------------------------------------------------------------------
     # Query execution API
@@ -1772,11 +1876,13 @@ class SQLQuerySet(Atom, Generic[T]):
     async def update(self, **values):
         """Perform an update of the given values."""
         # Translate any renamed fields back to the database value
-        for py_name, db_name in self.proxy.model.__renamed_fields__.items():
+        p = self.proxy
+        connection = values.pop(p.connection_kwarg, self.connection)
+        for py_name, db_name in p.model.__renamed_fields__.items():
             if py_name in values:
                 values[db_name] = values.pop(py_name)
         q = self.query("update").values(**values)
-        return await self.proxy.execute(q, connection=self.connection)
+        return await p.execute(q, connection=connection)
 
     def __await__(self):
         # So await Model.objects.filter() works
@@ -1886,8 +1992,9 @@ class SQLQuerySet(Atom, Generic[T]):
     async def last(self) -> Optional[T]:
         if not self.order_clauses:
             raise ValueError("Using last on an unordered query is not supported")
-        order_clauses = [reverse_order_clause(clause) for clause in self.order_clauses]
-        return await self.clone(order_clauses=order_clauses).get()
+        copy = self.clone()
+        copy.order_clauses = [reverse_order_clause(clause) for clause in copy.order_clauses]
+        return await copy.get()
 
 
 class SQLBinding(Atom):
@@ -2143,6 +2250,79 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
     return generate_function(source, namespace, "__restorestate__")
 
 
+def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
+    """ Optimized function to get only the state that needs to go into the db """
+    default_flatten = cls.serializer.flatten
+    members = cls.members()
+    namespace = {
+        "default_flatten": default_flatten,
+    }
+    template = [
+        "def __getdbstate__(self, scope=None):",
+        "scope = scope or {}",
+        "scope[id(self)] = self",
+        "state = {",
+    ]
+    table = cls.__table__
+
+    # Generate an insert query and extract the processors
+    q = table.insert().values(**{k: sa.bindparam(k) for k in cls.__db_fields__})
+    dialect = cls.objects.engine.dialect
+    compiled = q.compile(dialect=dialect)
+    processors = compiled._bind_processors
+
+    for f in cls.__fields__:
+        # Since f is potentially an untrusted input, make sure it is a valid
+        # python identifier to prevent unintended code being generated.
+        if not f.isidentifier():
+            raise ValueError(f"Field '{f}' cannot be used for code generation")
+
+        m = members[f]
+        meta = m.metadata or {}
+        flatten = meta.get("flatten", default_flatten)
+        if flatten is default_flatten:
+            RelModel= None
+            if isinstance(m, FK_TYPES):
+                types = resolve_member_types(m)
+                if types and len(types) == 1 and issubclass(types[0], Model):
+                    RelModel = types[0]
+            if RelModel is not None and issubclass(RelModel, SQLModel):
+                # Inline getting the id
+                expr = f"None if self.{f} is None else self.{f}._id"
+            elif RelModel is not None and issubclass(RelModel, Model):
+                expr = f"None if self.{f} is None else self.{f}.__getstate__(scope=scope)"
+            elif is_primitive_member(m):
+                expr = f"self.{f}"
+            else:
+                expr = f"default_flatten(self.{f}, scope)"
+        else:
+            namespace[f"flatten_{f}"] = flatten
+            expr = f"flatten_{f}(self.{f}, scope)"
+
+        k = cls.__renamed_fields__.get(f, f)
+        if k in processors:
+            # If table column needs post-processed by sqlalchemy, do it now
+            namespace[f"process_{f}"] = processors[k]
+            template.append(f'    "{k}": process_{f}({expr}),')
+        else:
+            template.append(f'    "{k}": {expr},')
+    template.append("}")
+
+    # Remove pk if it is not defined
+    template.append("if not self._id:")
+    pk_field = cls.__pk__
+    assert pk_field.isidentifier()
+    template.append(f'    del state["{cls.__pk__}"]')
+
+    template.append("return state")
+    source = "\n    ".join(template)
+    # print("\n----------------------------------------\n")
+    # print(cls)
+    # print(source)
+    # print("\n----------------------------------------\n")
+    return generate_function(source, namespace, "__getdbstate__")
+
+
 class SQLMeta(ModelMeta):
     """Both the pk and _id are aliases to the primary key"""
 
@@ -2234,27 +2414,15 @@ class SQLMeta(ModelMeta):
         cls.__joined_pk__ = f"{cls.__model__}_{cls.__pk__}"
 
         # Create a set of fields to remove from state before saving to the db
-        # this removes Relation instances and several needed for json
-        excluded_fields = cls.__excluded_fields__ = {
-            "__model__",
-            "__ref__",
-            "__restored__",
-        }
-        if cls.__pk__ != "_id":
-            excluded_fields.add("_id")
-        for name, member in cls.members().items():
-            if isinstance(member, Relation):
-                excluded_fields.add(name)
-
         # Cache the mapping of any renamed fields
         renamed_fields = cls.__renamed_fields__ = {}
         for old_name, member in cls.members().items():
-            if old_name in excluded_fields:
-                continue  # Ignore excluded fields
-            if member.metadata:
-                new_name = member.metadata.get("name")
-                if new_name is not None:
+            if meta := member.metadata:
+                if new_name := meta.get("name"):
                     renamed_fields[old_name] = new_name
+
+        # Final set of db fields
+        cls.__db_fields__ = tuple(renamed_fields.get(f, f) for f in cls.__fields__)
 
         return cls
 
@@ -2278,8 +2446,8 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Mapping is class attr -> database column name.
     __renamed_fields__: ClassVar[dict[str, str]]
 
-    #: Set of fields to exclude from the database
-    __excluded_fields__: ClassVar[set[str]]
+    #: Set of fields that get saved to the db
+    __db_fields__: ClassVar[set[str]]
 
     #: Reference to the sqlalchemy table backing this model
     __table__: ClassVar[Optional[sa.Table]]
@@ -2287,6 +2455,10 @@ class SQLModel(Model, metaclass=SQLMeta):
     #: Database name. If the `database` field of the manager is a dict
     #: This field will be used to determine which engine to use.
     __database__: ClassVar[str] = "default"
+
+    #: Optimized function for geting only state that goes into the db.
+    #: This is generated by the metaclass
+    __generated_getdbstate__: ClassVar[GetStateFn]
 
     #: Use SQL serializer
     serializer = SQLModelSerializer.instance()
@@ -2398,34 +2570,22 @@ class SQLModel(Model, metaclass=SQLMeta):
         if skip or not self._id:
             return  # Already loaded or won't do anything
         db = self.objects
-        t = db.table
         if fields is not None:
+            t = db.table
             renamed = self.__renamed_fields__
             columns = (t.c[renamed.get(f, f)] for f in fields)
-            q = sa.select(columns).select_from(t)
+            q = sa.select(columns).select_from(t).where(t.c[self.__pk__] == self._id)
+            state = await db.fetchone(q, connection=connection)
         else:
-            q = t.select()
-        q = q.where(t.c[self.__pk__] == self._id)
-        state = await db.fetchone(q, connection=connection)
+            state = await db.fetchone(db.select_query, {"pk": self._id}, connection=connection)
         await self.__restorestate__(state)
 
-    def __prepare_state_for_db__(self):
-        """Get the state that should be saved into the database"""
-        state = self.__getstate__()
-
-        # Remove any fields are in the state but should not go into the db
-        for f in self.__excluded_fields__:
-            state.pop(f, None)
-
-        # Replace any renamed fields
-        for py_name, db_name in self.__renamed_fields__.items():
-            state[db_name] = state.pop(py_name)
-
-        if not self._id:
-            # Postgres errors if using None for the pk
-            state.pop(self.__pk__, None)
-
-        return state
+    def __getdbstate__(self) -> StateType:
+        """ Get the state that should be saved into the database.
+        If the `_id` of this object does not evaluate to True the primary key
+        field will be omitted.
+        """
+        return self.__generated_getdbstate__()
 
     async def save(
         self: T,
@@ -2457,43 +2617,45 @@ class SQLModel(Model, metaclass=SQLMeta):
             raise ValueError("Cannot use force_insert and force_update together")
 
         db = self.objects
-        table = db.table
-        state = self.__prepare_state_for_db__()
+        state = self.__getdbstate__()
+        pk = self._id
         async with db.connection(connection) as conn:
-            if force_update or (self._id and not force_insert):
+            if force_update or (pk and not force_insert):
                 # If update fields was given, only pass those
                 if update_fields is not None:
                     # Replace any update fields with the appropriate name
                     renamed = self.__renamed_fields__
-                    update_fields = [renamed.get(f, f) for f in update_fields]
+                    update_fields = (renamed.get(f, f) for f in update_fields)
 
+                    table = db.table
                     # Replace update fields with only those given
                     state = {f: state[f] for f in update_fields}
+                    q = (
+                        table.update()
+                        .where(table.c[self.__pk__] == pk)
+                        .values(**state)
+                    )
+                    r = await conn.execute(q)
+                else:
+                    r = await conn.execute(db.update_query, state)
 
-                q = (
-                    table.update()
-                    .where(table.c[self.__pk__] == self._id)
-                    .values(**state)
-                )
-                r = await conn.execute(q)
                 if not r.rowcount:
                     log.warning(
                         f'Did not update "{self}", either no rows with '
-                        f"pk={self._id} exist or it has not changed."
+                        f"pk={pk} exist or it has not changed."
                     )
             else:
-                q = table.insert().values(**state)
-                r = await conn.execute(q)
-
-                # Don't overwrite if force inserting
-                if not self._id:
+                if pk:
+                    r = await conn.execute(db.force_insert_query, state)
+                else:
+                    r = await conn.execute(db.insert_query, state)
                     if hasattr(r, "lastrowid"):
-                        self._id = r.lastrowid  # MySQL
+                        pk = self._id = r.lastrowid  # MySQL
                     else:
-                        self._id = await r.scalar()  # Postgres
+                        pk = self._id = await r.scalar()  # Postgres
 
                 # Save a ref to the object in the model cache
-                db.cache[self._id] = self
+                db.cache[pk] = self
             self.__restored__ = True
             return r
 
@@ -2503,14 +2665,10 @@ class SQLModel(Model, metaclass=SQLMeta):
         if not pk:
             return
         db = self.objects
-        table = db.table  # type: sa.Table
-        q = table.delete().where(table.c[self.__pk__] == pk)
         async with db.connection(connection) as conn:
-            r = await conn.execute(q)
+            r = await conn.execute(db.delete_query, {"pk": pk})
             if not r.rowcount:
-                log.warning(
-                    f'Did not delete "{self}", no rows with ' f"pk={self._id} exist."
-                )
+                log.warning(f"Did not delete '{self}', no rows with pk={pk} exist.")
             del db.cache[pk]
             del self._id
             return r
