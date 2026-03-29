@@ -24,9 +24,16 @@ from atom.api import (
 )
 
 if "DATABASE_URL" not in os.environ:
-    os.environ["DATABASE_URL"] = (
-        "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
-    )
+    db_type = os.environ.get("DATABASE_TYPE", "postgres")
+    if db_type == 'postgres':
+        db_url = "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
+    elif db_type == 'mysql':
+        db_url = "mysql://mysql:mysql@127.0.0.1:5432/test_atomdb"
+    elif db_type == 'sqlite':
+        db_url = "test_atomdb.sqlite"
+    else:
+        raise ValueError("Unsupported DB type")
+    os.environ["DATABASE_URL"] = db_url
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 

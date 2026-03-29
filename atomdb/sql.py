@@ -997,6 +997,12 @@ class SQLTableProxy(Atom, Generic[T]):
     #: Key used to pass the force restore option
     restore_kwarg = Str("force_restore")
 
+    #: Default queryset object. All queries are cloned from this.
+    api = ForwardTyped(lambda: SQLQuerySet)
+
+    def _default_api(self):
+        return SQLQuerySet(proxy=self)
+
     #: Compiled insert query that generates a new pk
     def _get_insert_query(self):
         table = self.table
@@ -1271,6 +1277,7 @@ class SQLTableProxy(Atom, Generic[T]):
         """
         if not items:
             return items
+        cache = self.cache
         values = [item.__getdbstate__() for item in items]
         async with self.connection(connection) as conn:
             table = self.table
@@ -1280,7 +1287,6 @@ class SQLTableProxy(Atom, Generic[T]):
                 # TODO: Support executemany
                 q = table.insert().returning(table.c[self.model.__pk__]).values(values)
                 cursor = await conn.execute(q)
-                cache = self.cache
                 for r, item in zip(await cursor.fetchall(), items):
                     # Don't overwrite if force inserting
                     if not item._id:
@@ -1303,9 +1309,8 @@ class SQLTableProxy(Atom, Generic[T]):
             return items
 
     def __getattr__(self, name: str):
-        """All other fields are delegated to the query set"""
-        qs: SQLQuerySet[T] = SQLQuerySet(proxy=self)
-        return getattr(qs, name)
+        """All other fields are delegated to the query set api"""
+        return getattr(self.api, name)
 
 
 @functools.lru_cache(1024)
@@ -1431,6 +1436,8 @@ def resolve_column_operator(model: Type["SQLModel"], query: str) -> tuple[Column
 
 
 def build_filter(model: "SQLModel", query: dict[str, Any], related_clauses: set[str]):
+    if not query:
+        raise ValueError("Query cannot be empty")
     scope = {}
     clauses = []
     for k, v in query.items():
@@ -1700,7 +1707,8 @@ class SQLQuerySet(Atom, Generic[T]):
         if kwargs:
             copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
             copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
-            filter_clauses.append(build_filter(p.model, kwargs, related_clauses))
+            if kwargs:
+                filter_clauses.append(build_filter(p.model, kwargs, related_clauses))
 
         return copy
 
@@ -1743,7 +1751,8 @@ class SQLQuerySet(Atom, Generic[T]):
         if kwargs:
             copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
             copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
-            filter_clauses.append(not_(build_filter(p.model, kwargs, related_clauses)))
+            if kwargs:
+                filter_clauses.append(not_(build_filter(p.model, kwargs, related_clauses)))
         return copy
 
     def __getitem__(self, key: Union[int, slice]) -> "SQLQuerySet[T]":
