@@ -55,7 +55,8 @@ from atom.api import (
 )
 from atom.catom import atomclist
 from sqlalchemy.engine import ddl
-from sqlalchemy.sql import schema
+from sqlalchemy.sql import schema, ClauseElement
+from sqlalchemy.sql.compiler import Compiled
 from sqlalchemy.sql.elements import UnaryExpression
 from sqlalchemy.sql.expression import FromClause
 from sqlalchemy.sql.operators import asc_op, desc_op
@@ -174,6 +175,10 @@ CONSTRAINT_NAMING_CONVENTIONS = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
+# Query compile args
+sa_version_info = tuple(map(int, sa.__version__.split(".")[:2]))
+DEFAULT_COMPILE_KWARGS = {"render_postcompile": True} if sa_version_info > (1, 3) else {}
 
 log = logging.getLogger("atomdb.sql")
 
@@ -997,13 +1002,22 @@ class SQLTableProxy(Atom, Generic[T]):
     #: Key used to pass the force restore option
     restore_kwarg = Str("force_restore")
 
+    #: Query compile kwargs
+    compile_kwargs = Dict(default=DEFAULT_COMPILE_KWARGS)
+
     #: Default queryset object. All queries are cloned from this.
-    api = ForwardTyped(lambda: SQLQuerySet)
+    api = ForwardInstance(lambda: SQLQuerySet)
 
     def _default_api(self):
         return SQLQuerySet(proxy=self)
 
-    #: Compiled insert query that generates a new pk
+    def compile_query(self, q: ClauseElement) -> Compiled:
+        """ Compile an sqlalchemy query into a string """
+        return q.compile(
+            dialect=self.engine.dialect,
+            compile_kwargs=self.compile_kwargs
+        )
+
     def _get_insert_query(self):
         table = self.table
         model = self.model
@@ -1013,20 +1027,34 @@ class SQLTableProxy(Atom, Generic[T]):
             if k != model.__pk__
         }
         q = table.insert().values(**values)
-        return str(q.compile(dialect=self.engine.dialect))
+        return self.compile_query(q)
+
+    #: Compiled insert query that generates a new pk
     insert_query = Property(_get_insert_query, cached=True)
 
-    #: Compiled insert query that uses a pre-created pk
-    #: This is used for force inserting
+    def _get_insert_returning_query(self):
+        table = self.table
+        model = self.model
+        values = {
+            k: sa.bindparam(k)
+            for k in model.__db_fields__
+            if k != model.__pk__
+        }
+        q = table.insert().returning(table.c[model.__pk__]).values(**values)
+        return self.compile_query(q)
+
+    #: Compiled insert query that returns the generated id
+    insert_returning_query = Property(_get_insert_returning_query, cached=True)
+
     def _get_force_insert_query(self):
         table = self.table
         model = self.model
         values = {k: sa.bindparam(k) for k in model.__db_fields__}
         q = table.insert().values(**values)
-        return str(q.compile(dialect=self.engine.dialect))
+        return self.compile_query(q)
+    #: Compiled insert query that uses a pre-created pk
     force_insert_query = Property(_get_force_insert_query, cached=True)
 
-    #: Compiled update query that updates all fields
     def _get_update_query(self):
         table = self.table
         model = self.model
@@ -1037,26 +1065,27 @@ class SQLTableProxy(Atom, Generic[T]):
         q = table.update().where(
             table.c[model.__pk__]==sa.bindparam(model.__pk__)
         ).values(**values)
-        return str(q.compile(dialect=self.engine.dialect))
+        return self.compile_query(q)
 
+    #: Compiled update query that updates all fields
     update_query = Property(_get_update_query, cached=True)
 
-    #: Compiled delete query
     def _get_delete_query(self):
         table = self.table
         model = self.model
         q = table.delete().where(table.c[model.__pk__]==sa.bindparam("pk"))
-        return str(q.compile(dialect=self.engine.dialect))
+        return self.compile_query(q)
 
+    #: Compiled delete where pk=pk query
     delete_query = Property(_get_delete_query, cached=True)
 
-    #: Compiled select query
     def _get_select_query(self):
         table = self.table
         model = self.model
         q = table.select().where(table.c[model.__pk__]==sa.bindparam("pk"))
-        return str(q.compile(dialect=self.engine.dialect))
+        return self.compile_query(q)
 
+    #: Compiled select where pk=pk query
     select_query = Property(_get_select_query, cached=True)
 
     #: Reference to the aiomysql or aiopg Engine
@@ -1256,7 +1285,7 @@ class SQLTableProxy(Atom, Generic[T]):
         await obj.save(force_insert=True, connection=connection)
         return obj
 
-    async def bulk_create(self, items: Sequence[T], connection=None) -> Sequence[T]:
+    async def bulk_create(self, items: Sequence[T], force_insert: bool = False, connection=None) -> Sequence[T]:
         """Perform a bulk create from a sequence of models. This will
         populate the primary key of the items as needed but will not pull
         any fields that have not been defined. The restored flag will still
@@ -1265,7 +1294,9 @@ class SQLTableProxy(Atom, Generic[T]):
         Parameters
         ----------
         items: Sequence[T]
-            The list of items to create.
+            The items to create.
+        force_insert: bool
+            If the items generate their own pk (eg if the pk is a uuid), set this to True
         connection: Connetion
             The connection to use (if None one from the pool will be used)
 
@@ -1284,7 +1315,7 @@ class SQLTableProxy(Atom, Generic[T]):
 
             # TODO: Properly detect?
             if "pg" in conn.__class__.__module__:
-                # TODO: Support executemany
+                # aiopg does not support executemany so it needs to generate the query
                 q = table.insert().returning(table.c[self.model.__pk__]).values(values)
                 cursor = await conn.execute(q)
                 for r, item in zip(await cursor.fetchall(), items):
@@ -1293,18 +1324,21 @@ class SQLTableProxy(Atom, Generic[T]):
                         item._id = r[0]
                     cache[item._id] = item
             else:
-                # TODO: Get return value?
-                q = table.insert().values(values)
-                cursor = await conn.execute(q)
-                if hasattr(cursor, "lastrowid"):
-                    lastrowid = cursor.lastrowid
-                    for item in items:
-                        # Don't overwrite if force inserting
-                        if not item._id:
-                            item._id = lastrowid
-                        cache[item._id] = item
-                        lastrowid -= 1
-
+                # mysql and sqlite support executemany
+                if force_insert:
+                    q = self.force_insert_query
+                else:
+                    q = self.insert_query
+                cursor = await conn.execute(f"{q}", values)
+                # lastrowid = cursor.lastrowid
+                # if isinstance(lastrowid, int):
+                #     # On mysql attemp to populate the ids
+                #     for item in items:
+                #         # Don't overwrite if force inserting
+                #         if not item._id:
+                #             item._id = lastrowid
+                #         cache[item._id] = item
+                #         lastrowid -= 1
 
             return items
 
@@ -1507,7 +1541,7 @@ class SQLQuerySet(Atom, Generic[T]):
             q = q.distinct(*distinct_clauses)
 
         if filter_clauses := self.filter_clauses:
-            q = q.where(*filter_clauses)
+            q = q.where(and_(*filter_clauses))
 
         if order_clauses := self.order_clauses:
             q = q.order_by(*order_clauses)
@@ -2013,6 +2047,8 @@ class SQLBinding(Atom):
     #: The queue
     queue = ContainerList()
 
+    db_name = Str("default")
+
     engine = property(lambda s: s)
 
     @property
@@ -2024,7 +2060,7 @@ class SQLBinding(Atom):
         """Get the dialect of the database."""
         db = self.manager.database
         if isinstance(db, dict):
-            db = db["default"]
+            db = db[self.db_name]
         return db.dialect
 
     def schema_for_object(self, obj):
@@ -2063,7 +2099,7 @@ class SQLBinding(Atom):
     async def wait(self):
         db = self.manager.database
         if isinstance(db, dict):
-            engine = db["default"]
+            engine = db[self.db_name]
         else:
             engine = db
         result = None
@@ -2268,11 +2304,10 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
     }
     template = [
         "def __getdbstate__(self, scope=None):",
-        "scope = scope or {}",
-        "scope[id(self)] = self",
         "state = {",
     ]
     table = cls.__table__
+    needs_scope = False
 
     # Generate an insert query and extract the processors
     q = table.insert().values(**{k: sa.bindparam(k) for k in cls.__db_fields__})
@@ -2299,13 +2334,16 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
                 # Inline getting the id
                 expr = f"None if self.{f} is None else self.{f}._id"
             elif RelModel is not None and issubclass(RelModel, Model):
+                needs_scope = True
                 expr = f"None if self.{f} is None else self.{f}.__getstate__(scope=scope)"
             elif is_primitive_member(m):
                 expr = f"self.{f}"
             else:
+                needs_scope = True
                 expr = f"default_flatten(self.{f}, scope)"
         else:
             namespace[f"flatten_{f}"] = flatten
+            needs_scope = True
             expr = f"flatten_{f}(self.{f}, scope)"
 
         k = cls.__renamed_fields__.get(f, f)
@@ -2316,6 +2354,11 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
         else:
             template.append(f'    "{k}": {expr},')
     template.append("}")
+
+    if needs_scope:
+        # Only generate a scope if one of the fields needs it
+        template.insert(1, "scope = scope or {}")
+        template.insert(2, "scope[id(self)] = self")
 
     # Remove pk if it is not defined
     template.append("if not self._id:")
@@ -2579,14 +2622,17 @@ class SQLModel(Model, metaclass=SQLMeta):
         if skip or not self._id:
             return  # Already loaded or won't do anything
         db = self.objects
+        t = db.table
         if fields is not None:
-            t = db.table
             renamed = self.__renamed_fields__
             columns = (t.c[renamed.get(f, f)] for f in fields)
             q = sa.select(columns).select_from(t).where(t.c[self.__pk__] == self._id)
             state = await db.fetchone(q, connection=connection)
         else:
-            state = await db.fetchone(db.select_query, {"pk": self._id}, connection=connection)
+            # TODO: Figured out how to use compiled query
+            q = t.select().where(t.c[self.__pk__] == self._id)
+            state = await db.fetchone(q, connection=connection)
+
         await self.__restorestate__(state)
 
     def __getdbstate__(self) -> StateType:
@@ -2646,7 +2692,7 @@ class SQLModel(Model, metaclass=SQLMeta):
                     )
                     r = await conn.execute(q)
                 else:
-                    r = await conn.execute(db.update_query, state)
+                    r = await conn.execute(f"{db.update_query}", state)
 
                 if not r.rowcount:
                     log.warning(
@@ -2655,9 +2701,9 @@ class SQLModel(Model, metaclass=SQLMeta):
                     )
             else:
                 if pk:
-                    r = await conn.execute(db.force_insert_query, state)
+                    r = await conn.execute(f"{db.force_insert_query}", state)
                 else:
-                    r = await conn.execute(db.insert_query, state)
+                    r = await conn.execute(f"{db.insert_query}", state)
                     if hasattr(r, "lastrowid"):
                         pk = self._id = r.lastrowid  # MySQL
                     else:
@@ -2675,7 +2721,7 @@ class SQLModel(Model, metaclass=SQLMeta):
             return
         db = self.objects
         async with db.connection(connection) as conn:
-            r = await conn.execute(db.delete_query, {"pk": pk})
+            r = await conn.execute(f"{db.delete_query}", {"pk": pk})
             if not r.rowcount:
                 log.warning(f"Did not delete '{self}', no rows with pk={pk} exist.")
             del db.cache[pk]

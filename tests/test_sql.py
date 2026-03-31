@@ -28,9 +28,9 @@ if "DATABASE_URL" not in os.environ:
     if db_type == 'postgres':
         db_url = "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
     elif db_type == 'mysql':
-        db_url = "mysql://mysql:mysql@127.0.0.1:5432/test_atomdb"
+        db_url = "mysql://mysql:mysql@127.0.0.1:3306/test_atomdb"
     elif db_type == 'sqlite':
-        db_url = "test_atomdb.sqlite"
+        db_url = "sqlite://test_atomdb.sqlite"
     else:
         raise ValueError("Unsupported DB type")
     os.environ["DATABASE_URL"] = db_url
@@ -538,7 +538,7 @@ async def test_query(db):
     # Create second user
     for i in range(10):
         user = User(
-            name=f"name-{i}", email="email-{i}@example.com", age=20, active=True
+            name=f"name-{i}", email=f"email-{i}@example.com", age=20, active=True
         )
         await user.save()
 
