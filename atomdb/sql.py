@@ -24,7 +24,6 @@ from typing import (
     Iterator,
     Optional,
     Sequence,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -48,23 +47,23 @@ from atom.api import (
     Property,
     Set,
     Str,
-    Typed,
     Tuple,
+    Typed,
     Validate,
     Value,
 )
 from atom.catom import atomclist
+from sqlalchemy import and_, not_, or_
 from sqlalchemy.engine import ddl
-from sqlalchemy.sql import schema, ClauseElement
+from sqlalchemy.sql import ClauseElement, schema
 from sqlalchemy.sql.compiler import Compiled
 from sqlalchemy.sql.elements import UnaryExpression
 from sqlalchemy.sql.expression import FromClause
-from sqlalchemy.sql.operators import asc_op, desc_op
+from sqlalchemy.sql.operators import ColumnOperators, asc_op, desc_op
 from sqlalchemy.sql.type_api import TypeEngine
-from sqlalchemy import and_, or_, not_
-
 
 from .base import (
+    GetStateFn,
     JSONModel,
     JSONSerializer,
     Model,
@@ -178,7 +177,9 @@ CONSTRAINT_NAMING_CONVENTIONS = {
 
 # Query compile args
 sa_version_info = tuple(map(int, sa.__version__.split(".")[:2]))
-DEFAULT_COMPILE_KWARGS = {"render_postcompile": True} if sa_version_info > (1, 3) else {}
+DEFAULT_COMPILE_KWARGS = (
+    {"render_postcompile": True} if sa_version_info > (1, 3) else {}
+)
 
 log = logging.getLogger("atomdb.sql")
 
@@ -187,7 +188,8 @@ T = TypeVar("T", bound="SQLModel")
 
 
 class Q(Atom):
-    """ A Query dict that supports the pipe | operator to perform an OR query. """
+    """A Query dict that supports the pipe | operator to perform an OR query."""
+
     clauses = Tuple(dict)
 
     def __init__(self, **kwargs):
@@ -203,7 +205,7 @@ class Q(Atom):
         return copy
 
 
-def find_sql_models() -> Iterator[Type["SQLModel"]]:
+def find_sql_models() -> Iterator[type["SQLModel"]]:
     """Finds all non-abstract imported SQLModels by looking up subclasses
     of the SQLModel.
 
@@ -238,7 +240,7 @@ def create_related_list(relation: "Relation"):
         async def load(self, inplace: bool = True) -> list:
             """Returns a list of the related values."""
             owner = atomlist_owner(self)
-            Model = cast(Type[SQLModel], type(owner))
+            Model = cast(type[SQLModel], type(owner))
             ThroughModel = relation.through
             RelModel = relation.to
             if ThroughModel is not None:
@@ -316,7 +318,7 @@ def create_related_list(relation: "Relation"):
             ThroughModel = relation.through
             RelModel = relation.to
             if ThroughModel is not None:
-                Model = cast(Type[SQLModel], type(owner))
+                Model = cast(type[SQLModel], type(owner))
                 owner_backref = resolve_backref(Model, ThroughModel)
                 relation_backref = resolve_backref(RelModel, ThroughModel)
                 removed_ids = [obj._id for obj in saved.difference(current)]
@@ -354,13 +356,13 @@ class Relation(ContainerList):
 
     def __init__(
         self,
-        item: Callable[[], Type[Model]],
+        item: Callable[[], type[Model]],
         default: Any = None,
         *,
-        through: Callable[[], Optional[Type[Model]]] = lambda: None,
+        through: Callable[[], Optional[type[Model]]] = lambda: None,
     ):
         super().__init__(ForwardInstance(item))  # type: ignore
-        self._to: Optional[Type[Model]] = None
+        self._to: Optional[type[Model]] = None
         self._through = through
         self._cls = create_related_list(self)
         self.tag(store=False)
@@ -373,11 +375,11 @@ class Relation(ContainerList):
         value.__class__ = self._cls
         return value
 
-    def resolve(self) -> Type[Model]:
+    def resolve(self) -> type[Model]:
         return self.to
 
     @property
-    def to(self) -> Type[Model]:
+    def to(self) -> type[Model]:
         to = self._to
         if to is None:
             types = resolve_member_types(self.validate_mode[-1])
@@ -386,7 +388,7 @@ class Relation(ContainerList):
         return to
 
     @property
-    def through(self) -> Optional[Type[Model]]:
+    def through(self) -> Optional[type[Model]]:
         """Return the through model"""
         return self._through()
 
@@ -404,9 +406,9 @@ class RelatedTyped(ForwardTyped):
 
 
 def py_type_to_sql_column(
-    model: Type[Model],
+    model: type[Model],
     member: Member,
-    types: Union[Type, tuple[Type, ...]],
+    types: Union[type, tuple[type, ...]],
     **kwargs,
 ) -> TypeEngine:
     """Convert the python type to an alchemy table column type"""
@@ -459,7 +461,7 @@ def py_type_to_sql_column(
 
 @functools.lru_cache(1024)
 def resolve_member_column(
-    model: Type["SQLModel"], field: str
+    model: type["SQLModel"], field: str
 ) -> tuple[sa.Column, set[str]]:
     """Get the sqlalchemy column for the given model and field.
 
@@ -527,7 +529,7 @@ def resolve_member_column(
 
 
 @functools.lru_cache(1024)
-def resolve_backref(model: Type["SQLModel"], through: Type["SQLModel"]) -> Member:
+def resolve_backref(model: type["SQLModel"], through: type["SQLModel"]) -> Member:
     """Find the member on the through model that refers to the given model."""
     assert model.objects and through.objects  # Force creation
     for other_model, referring_member in model.__backrefs__:
@@ -538,8 +540,8 @@ def resolve_backref(model: Type["SQLModel"], through: Type["SQLModel"]) -> Membe
 
 @functools.lru_cache(1024)
 def resolve_relation(
-    model: Type["SQLModel"], field: str
-) -> tuple[Member, Type[Model], Member, sa.Column]:
+    model: type["SQLModel"], field: str
+) -> tuple[Member, type[Model], Member, sa.Column]:
     """Lookup a Relation.
 
     Parameters
@@ -558,7 +560,7 @@ def resolve_relation(
 
     """
     relation = model.members().get(field)
-    RelModel: Optional[Type[Model]] = None
+    RelModel: Optional[type[Model]] = None
     if isinstance(relation, Relation):
         # RelModel has a many to one relation back to model
         RelModel = cast(Relation, relation).to
@@ -586,7 +588,7 @@ def resolve_relation(
 
 
 def atom_member_to_sql_column(
-    model: Type["SQLModel"], member: Member, **kwargs
+    model: type["SQLModel"], member: Member, **kwargs
 ) -> TypeEngine:
     """Convert the atom member type to an sqlalchemy table column type
     See https://docs.sqlalchemy.org/en/latest/core/type_basics.html
@@ -661,7 +663,7 @@ def atom_member_to_sql_column(
     )
 
 
-def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
+def create_table_column(model: type["SQLModel"], member: Member) -> sa.Column:
     """Converts an Atom member into a sqlalchemy data type.
 
     Parameters
@@ -734,7 +736,7 @@ def create_table_column(model: Type["SQLModel"], member: Member) -> sa.Column:
     return sa.Column(column_name, *args, **kwargs)
 
 
-def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
+def create_table(model: type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
     """Create an sqlalchemy table by inspecting the Model and generating
     a column for each member.
 
@@ -824,7 +826,7 @@ def create_table(model: Type["SQLModel"], metadata: sa.MetaData) -> sa.Table:
     return table
 
 
-def model_latest_by_field(Model: Type["SQLModel"]) -> tuple[str]:
+def model_latest_by_field(Model: type["SQLModel"]) -> tuple[str]:
     meta = getattr(Model, "Meta", None)
     get_latest_by = getattr(meta, "get_latest_by", None)
     if get_latest_by is None:
@@ -916,13 +918,13 @@ class SQLModelManager(ModelManager):
         return sa.MetaData(binding, naming_convention=self.conventions)
 
     def _observe_database(self, change):
-        """ The generated function depends on the database dialect, so regenerate """
+        """The generated function depends on the database dialect, so regenerate"""
         if self.database:
             for cls in find_sql_models():
                 if cls.__table__ is not None:
                     self.regenerate_code(cls)
 
-    def create_tables(self) -> dict[Type["SQLModel"], sa.Table]:
+    def create_tables(self) -> dict[type["SQLModel"], sa.Table]:
         """Create sqlalchemy tables for all registered SQLModels"""
         tables = {}
         for cls in find_sql_models():
@@ -934,8 +936,8 @@ class SQLModelManager(ModelManager):
             tables[cls] = table
         return tables
 
-    def initalize_model(self, cls: Type["SQLModel"]) -> sa.Table:
-        """ Create the table for the model. If the database is already defined also
+    def initalize_model(self, cls: type["SQLModel"]) -> sa.Table:
+        """Create the table for the model. If the database is already defined also
         generate the code for them.
         """
         assert cls.__table__ is None
@@ -944,13 +946,13 @@ class SQLModelManager(ModelManager):
             self.regenerate_code(cls)
         return table
 
-    def regenerate_code(self, cls: Type["SQLModel"]):
-        """ Regenerate the optimized load/restore functions for the model """
+    def regenerate_code(self, cls: type["SQLModel"]):
+        """Regenerate the optimized load/restore functions for the model"""
         cls.__generated_restorestate__ = generate_sql_restorestate(cls)
         cls.__generated_getdbstate__ = generate_sql_getdbstate(cls)
 
     def __get__(
-        self, obj: T, cls: Optional[Type[T]] = None
+        self, obj: T, cls: Optional[type[T]] = None
     ) -> Union["SQLTableProxy[T]", "SQLModelManager"]:
         """Retrieve the table for the requested object or class."""
         cls = cls or obj.__class__
@@ -1012,20 +1014,15 @@ class SQLTableProxy(Atom, Generic[T]):
         return SQLQuerySet(proxy=self)
 
     def compile_query(self, q: ClauseElement) -> Compiled:
-        """ Compile an sqlalchemy query into a string """
+        """Compile an sqlalchemy query into a string"""
         return q.compile(
-            dialect=self.engine.dialect,
-            compile_kwargs=self.compile_kwargs
+            dialect=self.engine.dialect, compile_kwargs=self.compile_kwargs
         )
 
     def _get_insert_query(self):
         table = self.table
         model = self.model
-        values = {
-            k: sa.bindparam(k)
-            for k in model.__db_fields__
-            if k != model.__pk__
-        }
+        values = {k: sa.bindparam(k) for k in model.__db_fields__ if k != model.__pk__}
         q = table.insert().values(**values)
         return self.compile_query(q)
 
@@ -1035,11 +1032,7 @@ class SQLTableProxy(Atom, Generic[T]):
     def _get_insert_returning_query(self):
         table = self.table
         model = self.model
-        values = {
-            k: sa.bindparam(k)
-            for k in model.__db_fields__
-            if k != model.__pk__
-        }
+        values = {k: sa.bindparam(k) for k in model.__db_fields__ if k != model.__pk__}
         q = table.insert().returning(table.c[model.__pk__]).values(**values)
         return self.compile_query(q)
 
@@ -1052,19 +1045,19 @@ class SQLTableProxy(Atom, Generic[T]):
         values = {k: sa.bindparam(k) for k in model.__db_fields__}
         q = table.insert().values(**values)
         return self.compile_query(q)
+
     #: Compiled insert query that uses a pre-created pk
     force_insert_query = Property(_get_force_insert_query, cached=True)
 
     def _get_update_query(self):
         table = self.table
         model = self.model
-        values = {
-            k: sa.bindparam(k)
-            for k in model.__db_fields__
-        }
-        q = table.update().where(
-            table.c[model.__pk__]==sa.bindparam(model.__pk__)
-        ).values(**values)
+        values = {k: sa.bindparam(k) for k in model.__db_fields__}
+        q = (
+            table.update()
+            .where(table.c[model.__pk__] == sa.bindparam(model.__pk__))
+            .values(**values)
+        )
         return self.compile_query(q)
 
     #: Compiled update query that updates all fields
@@ -1073,7 +1066,7 @@ class SQLTableProxy(Atom, Generic[T]):
     def _get_delete_query(self):
         table = self.table
         model = self.model
-        q = table.delete().where(table.c[model.__pk__]==sa.bindparam("pk"))
+        q = table.delete().where(table.c[model.__pk__] == sa.bindparam("pk"))
         return self.compile_query(q)
 
     #: Compiled delete where pk=pk query
@@ -1082,7 +1075,7 @@ class SQLTableProxy(Atom, Generic[T]):
     def _get_select_query(self):
         table = self.table
         model = self.model
-        q = table.select().where(table.c[model.__pk__]==sa.bindparam("pk"))
+        q = table.select().where(table.c[model.__pk__] == sa.bindparam("pk"))
         return self.compile_query(q)
 
     #: Compiled select where pk=pk query
@@ -1173,7 +1166,9 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.fetchall()
 
-    async def fetchmany(self, query: QueryType, size: Optional[int] = None, connection=None):
+    async def fetchmany(
+        self, query: QueryType, size: Optional[int] = None, connection=None
+    ):
         """Fetch size results for the query.
 
         Parameters
@@ -1195,7 +1190,9 @@ class SQLTableProxy(Atom, Generic[T]):
             r = await conn.execute(query)
             return await r.fetchmany(size)
 
-    async def fetchone(self, query: QueryType, params: Optional[dict] = None, connection=None):
+    async def fetchone(
+        self, query: QueryType, params: Optional[dict] = None, connection=None
+    ):
         """Fetch a single result for the query.
 
         Parameters
@@ -1285,7 +1282,9 @@ class SQLTableProxy(Atom, Generic[T]):
         await obj.save(force_insert=True, connection=connection)
         return obj
 
-    async def bulk_create(self, items: Sequence[T], force_insert: bool = False, connection=None) -> Sequence[T]:
+    async def bulk_create(
+        self, items: Sequence[T], force_insert: bool = False, connection=None
+    ) -> Sequence[T]:
         """Perform a bulk create from a sequence of models. This will
         populate the primary key of the items as needed but will not pull
         any fields that have not been defined. The restored flag will still
@@ -1349,7 +1348,7 @@ class SQLTableProxy(Atom, Generic[T]):
 
 @functools.lru_cache(1024)
 def resolve_from_clause(
-    model: Type["SQLModel"], clauses: tuple[str], join_type: str = "inner"
+    model: type["SQLModel"], clauses: tuple[str], join_type: str = "inner"
 ) -> tuple[set[sa.Table], FromClause, dict[Member, str]]:
     """Generate a cached from clause starting at the given model using the set of django-style clauses.
 
@@ -1442,7 +1441,9 @@ def resolve_from_clause(
 
 
 @functools.lru_cache(1024)
-def resolve_column_operator(model: Type["SQLModel"], query: str) -> tuple[ColumnOperators, set[str]]:
+def resolve_column_operator(
+    model: type["SQLModel"], query: str
+) -> tuple[ColumnOperators, set[str]]:
     """Create a where clause from a django-style parameter.
     This will modify the list of related clauses if a join occurs.
 
@@ -1469,10 +1470,12 @@ def resolve_column_operator(model: Type["SQLModel"], query: str) -> tuple[Column
     return getattr(col, QUERY_OPS[op]), new_clauses
 
 
-def build_filter(model: "SQLModel", query: dict[str, Any], related_clauses: set[str]):
+def build_filter(
+    model: type["SQLModel"], query: dict[str, Any], related_clauses: set[str]
+):
     if not query:
         raise ValueError("Query cannot be empty")
-    scope = {}
+    scope: ScopeType = {}
     clauses = []
     for k, v in query.items():
         op, new_clauses = resolve_column_operator(model, k)
@@ -1506,8 +1509,9 @@ class SQLQuerySet(Atom, Generic[T]):
     force_restore = Bool()
 
     def clone(self) -> "SQLQuerySet[T]":
-        """ Create a clone of the object """
-        return self.__class__(**self.__getstate__())
+        """Create a clone of the object"""
+        state = cast(StateType, self.__getstate__())
+        return self.__class__(**state)
 
     def query(self, query_type: str = "select", *columns, **kwargs):
         if kwargs:
@@ -1559,7 +1563,7 @@ class SQLQuerySet(Atom, Generic[T]):
         return q
 
     def select_related(
-        self, *related: Sequence[str], outer_join: Optional[bool] = None
+        self, *related: str, outer_join: Optional[bool] = None
     ) -> "SQLQuerySet[T]":
         """Define related fields to join in the query.
 
@@ -1582,7 +1586,7 @@ class SQLQuerySet(Atom, Generic[T]):
             copy.join_type = "outer"
         return copy
 
-    def prefetch_related(self, *related: Sequence[str]) -> "SQLQuerySet[T]":
+    def prefetch_related(self, *related: str) -> "SQLQuerySet[T]":
         """Define related fields to prefetch in a separate query.
 
         Parameters
@@ -1730,17 +1734,20 @@ class SQLQuerySet(Atom, Generic[T]):
         # Build filter
         for arg in args:
             if isinstance(arg, Q):
-                filter_clauses.append(or_(
-                    *(
-                        build_filter(p.model, query, related_clauses) for query in arg.clauses
+                filter_clauses.append(
+                    or_(
+                        *(
+                            build_filter(p.model, query, related_clauses)
+                            for query in arg.clauses
+                        )
                     )
-                ))
+                )
             else:
                 filter_clauses.append(arg)
 
         if kwargs:
             copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
-            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
+            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore) is True
             if kwargs:
                 filter_clauses.append(build_filter(p.model, kwargs, related_clauses))
 
@@ -1774,7 +1781,8 @@ class SQLQuerySet(Atom, Generic[T]):
             if isinstance(arg, Q):
                 clause = or_(
                     *(
-                        build_filter(p.model, query, related_clauses) for query in arg.clauses
+                        build_filter(p.model, query, related_clauses)
+                        for query in arg.clauses
                     )
                 )
             else:
@@ -1784,9 +1792,11 @@ class SQLQuerySet(Atom, Generic[T]):
         # Build the filter operations
         if kwargs:
             copy.connection = kwargs.pop(p.connection_kwarg, copy.connection)
-            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore)
+            copy.force_restore = kwargs.pop(p.restore_kwarg, copy.force_restore) is True
             if kwargs:
-                filter_clauses.append(not_(build_filter(p.model, kwargs, related_clauses)))
+                filter_clauses.append(
+                    not_(build_filter(p.model, kwargs, related_clauses))
+                )
         return copy
 
     def __getitem__(self, key: Union[int, slice]) -> "SQLQuerySet[T]":
@@ -2036,7 +2046,9 @@ class SQLQuerySet(Atom, Generic[T]):
         if not self.order_clauses:
             raise ValueError("Using last on an unordered query is not supported")
         copy = self.clone()
-        copy.order_clauses = [reverse_order_clause(clause) for clause in copy.order_clauses]
+        copy.order_clauses = [
+            reverse_order_clause(clause) for clause in copy.order_clauses
+        ]
         return await copy.get()
 
 
@@ -2113,14 +2125,14 @@ class SQLBinding(Atom):
         return result
 
 
-async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[T]:
+async def get_cached_model(cls: type[T], pk: Any, state: StateType) -> Optional[T]:
     """Retrieve a model from the cache using the given pk. If the cached
     object does not exist attempt to restore it from the state otherwise create
     a model that has not been loaded and only contains the id.
 
     Parameters
     ----------
-    cls: Type[SQLModel]
+    cls: type[SQLModel]
         The class to lookup.
     pk: Any
         The primary key to look for.
@@ -2151,7 +2163,7 @@ async def get_cached_model(cls: Type[T], pk: Any, state: StateType) -> Optional[
     return obj
 
 
-def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
+def generate_sql_restorestate(cls: type["SQLModel"]) -> RestoreStateFn:
     """Generate an optimized restore function for the SQL model. The generated
     function creates "inline" dict key lookups for the table columns that
     may have been joined or renamed. This avoids having to do this at runtime.
@@ -2295,8 +2307,8 @@ def generate_sql_restorestate(cls: Type["SQLModel"]) -> RestoreStateFn:
     return generate_function(source, namespace, "__restorestate__")
 
 
-def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
-    """ Optimized function to get only the state that needs to go into the db """
+def generate_sql_getdbstate(cls: type["SQLModel"]) -> GetStateFn:
+    """Optimized function to get only the state that needs to go into the db"""
     default_flatten = cls.serializer.flatten
     members = cls.members()
     namespace = {
@@ -2307,6 +2319,7 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
         "state = {",
     ]
     table = cls.__table__
+    assert table is not None
     needs_scope = False
 
     # Generate an insert query and extract the processors
@@ -2325,7 +2338,7 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
         meta = m.metadata or {}
         flatten = meta.get("flatten", default_flatten)
         if flatten is default_flatten:
-            RelModel= None
+            RelModel = None
             if isinstance(m, FK_TYPES):
                 types = resolve_member_types(m)
                 if types and len(types) == 1 and issubclass(types[0], Model):
@@ -2335,7 +2348,9 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
                 expr = f"None if self.{f} is None else self.{f}._id"
             elif RelModel is not None and issubclass(RelModel, Model):
                 needs_scope = True
-                expr = f"None if self.{f} is None else self.{f}.__getstate__(scope=scope)"
+                expr = (
+                    f"None if self.{f} is None else self.{f}.__getstate__(scope=scope)"
+                )
             elif is_primitive_member(m):
                 expr = f"self.{f}"
             else:
@@ -2378,7 +2393,7 @@ def generate_sql_getdbstate(cls: Type["SQLModel"]) -> GetStateFn:
 class SQLMeta(ModelMeta):
     """Both the pk and _id are aliases to the primary key"""
 
-    def __new__(meta, name, bases, dct):
+    def __new__(meta: type, name: str, bases: tuple[type, ...], dct: dict[str, Any]):
         cls = ModelMeta.__new__(meta, name, bases, dct)
 
         members = cls.members()
@@ -2386,7 +2401,7 @@ class SQLMeta(ModelMeta):
         # If a member tagged with primary_key=True is defined,
         # on this class, use that as the primary key and reassign
         # the _id member to alias the new primary key.
-        pk: Member = cls._id
+        pk = cls._id
         for name, m in members.items():
             if name == "_id":
                 continue
@@ -2432,7 +2447,7 @@ class SQLMeta(ModelMeta):
 
         # If a Meta class is defined check it's validity and if extending
         # do not inherit the abstract attribute
-        Meta = dct.get("Meta", None)
+        Meta: Optional[type[object]] = dct.get("Meta", None)
         if Meta is not None:
             for f in dir(Meta):
                 if f.startswith("_"):
@@ -2450,16 +2465,16 @@ class SQLMeta(ModelMeta):
 
         # If this inherited from an abstract model but didn't specify
         # Meta info make the subclass not abstract unless it was redefined
-        base_meta = getattr(cls, "Meta", None)
-        if base_meta and getattr(base_meta, "abstract", None):
+        base_meta: Optional[type[object]] = getattr(cls, "Meta", None)
+        if base_meta is not None and getattr(base_meta, "abstract", None):
             if not Meta:
 
-                class Meta(base_meta):
+                class NewMeta(base_meta):  # type: ignore
                     abstract = False
 
-                cls.Meta = Meta
+                cls.Meta = NewMeta
             elif getattr(Meta, "abstract", None) is None:
-                Meta.abstract = False
+                Meta.abstract = False  # type: ignore
 
         # Set the pk name after table is set
         cls.__pk__ = (pk.metadata or {}).get("name", pk.name)
@@ -2492,7 +2507,7 @@ class SQLModel(Model, metaclass=SQLMeta):
     __joined_pk__: ClassVar[str]
 
     #: Models which link back to this
-    __backrefs__: ClassVar[set[tuple[Type[Model], Member]]]
+    __backrefs__: ClassVar[set[tuple[type[Model], Member]]]
 
     #: List of fields which have been tagged with a different column name
     #: Mapping is class attr -> database column name.
@@ -2523,7 +2538,7 @@ class SQLModel(Model, metaclass=SQLMeta):
 
     @classmethod
     async def restore(
-        cls: Type[T],
+        cls: type[T],
         state: StateType,
         force: Optional[bool] = None,
         prefetched: Optional[dict[Any, StateType]] = None,
@@ -2635,12 +2650,12 @@ class SQLModel(Model, metaclass=SQLMeta):
 
         await self.__restorestate__(state)
 
-    def __getdbstate__(self) -> StateType:
-        """ Get the state that should be saved into the database.
+    def __getdbstate__(self, scope: Optional[ScopeType] = None) -> StateType:
+        """Get the state that should be saved into the database.
         If the `_id` of this object does not evaluate to True the primary key
         field will be omitted.
         """
-        return self.__generated_getdbstate__()
+        return self.__generated_getdbstate__(scope)
 
     async def save(
         self: T,
@@ -2657,7 +2672,7 @@ class SQLModel(Model, metaclass=SQLMeta):
             Ensure that save performs an insert
         force_update: Bool
             Ensure that save performs an update
-        update_fields: Iterable[str]
+        update_fields: Sequence[str]
             If given, only update the given fields
         connection: Connection
             The connection instance to use in a transaction
@@ -2680,16 +2695,12 @@ class SQLModel(Model, metaclass=SQLMeta):
                 if update_fields is not None:
                     # Replace any update fields with the appropriate name
                     renamed = self.__renamed_fields__
-                    update_fields = (renamed.get(f, f) for f in update_fields)
+                    relevant_fields = (renamed.get(f, f) for f in update_fields)
 
                     table = db.table
                     # Replace update fields with only those given
-                    state = {f: state[f] for f in update_fields}
-                    q = (
-                        table.update()
-                        .where(table.c[self.__pk__] == pk)
-                        .values(**state)
-                    )
+                    state = {f: state[f] for f in relevant_fields}
+                    q = table.update().where(table.c[self.__pk__] == pk).values(**state)
                     r = await conn.execute(q)
                 else:
                     r = await conn.execute(f"{db.update_query}", state)

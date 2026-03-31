@@ -25,11 +25,11 @@ from atom.api import (
 
 if "DATABASE_URL" not in os.environ:
     db_type = os.environ.get("DATABASE_TYPE", "postgres")
-    if db_type == 'postgres':
+    if db_type == "postgres":
         db_url = "postgres://postgres:postgres@127.0.0.1:5432/test_atomdb"
-    elif db_type == 'mysql':
+    elif db_type == "mysql":
         db_url = "mysql://mysql:mysql@127.0.0.1:3306/test_atomdb"
-    elif db_type == 'sqlite':
+    elif db_type == "sqlite":
         db_url = "sqlite://test_atomdb.sqlite"
     else:
         raise ValueError("Unsupported DB type")
@@ -58,11 +58,11 @@ except ImportError as e:
 
 from atomdb.sql import (  # noqa: E402
     JSONModel,
+    Q,
     RelatedInstance,
     Relation,
     SQLModel,
     SQLModelManager,
-    Q
 )
 
 #: Raise errors in tests
@@ -569,7 +569,9 @@ async def test_query_or(db):
     await reset_tables(User)
     bob = await User.objects.create(name="Bob", email="bob@example.com", active=True)
     jill = await User.objects.create(name="Jill", email="jill@foobar.com", active=False)
-    alice = await User.objects.create(name="Alice", email="alice@foobar.com", active=True)
+    alice = await User.objects.create(
+        name="Alice", email="alice@foobar.com", active=True
+    )
 
     users = await User.objects.filter(Q(name="Bob") | Q(name="Jill"))
     assert len(users) == 2
@@ -585,12 +587,14 @@ async def test_query_is_not_modified(db):
     await reset_tables(User)
     bob = await User.objects.create(name="Bob", email="bob@example.com", active=True)
     jill = await User.objects.create(name="Jill", email="jill@foobar.com", active=False)
-    alice = await User.objects.create(name="Alice", email="alice@foobar.com", active=True)
+    alice = await User.objects.create(
+        name="Alice", email="alice@foobar.com", active=True
+    )
 
     q = User.objects.filter(active=True)
     users = await q
     assert len(users) == 2
-    assert bob in users and alice in users
+    assert bob in users and alice in users and jill not in users
 
     q2 = q.filter(email__endswith="example.com")
     users = await q2
@@ -600,7 +604,7 @@ async def test_query_is_not_modified(db):
     # Make sure original query still returns the same
     users = await q
     assert len(users) == 2
-    assert bob in users and alice in users
+    assert bob in users and alice in users and jill not in users
 
 
 async def test_query_related(db):
@@ -1658,7 +1662,7 @@ async def test_save_errors(db):
     # Updating unsaved will not work. In atomdb 0.9+ it raises a KeyError because
     # the pk key is empty.
     with pytest.raises(KeyError):
-        r = await u.save(force_update=True)
+        await u.save(force_update=True)
 
 
 async def test_object_caching(db):
