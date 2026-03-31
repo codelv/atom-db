@@ -17,7 +17,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from inspect import iscoroutinefunction
 from pprint import pformat
-from typing import Any, Callable, ClassVar, Optional, Type, TypeVar
+from typing import Any, Callable, ClassVar, Optional, TypeVar
 from uuid import UUID
 
 from atom.api import (
@@ -52,7 +52,7 @@ log = logging.getLogger("atomdb")
 PRIMITIVE_TYPES = (int, float, bool, str)
 
 
-def find_subclasses(cls: Type[T]) -> list[Type[T]]:
+def find_subclasses(cls: type[T]) -> list[type[T]]:
     """Finds subclasses of the given class"""
     classes = []
     for subclass in cls.__subclasses__():
@@ -199,7 +199,7 @@ class ModelSerializer(Atom):
     """
 
     #: Hold one instance per subclass for easy reuse
-    _instances: ClassVar[dict[Type["ModelSerializer"], "ModelSerializer"]] = {}
+    _instances: ClassVar[dict[type["ModelSerializer"], "ModelSerializer"]] = {}
 
     #: Store all registered models
     registry = Dict()
@@ -217,7 +217,7 @@ class ModelSerializer(Atom):
     )
 
     @classmethod
-    def instance(cls: Type["ModelSerializer"]) -> "ModelSerializer":
+    def instance(cls: type["ModelSerializer"]) -> "ModelSerializer":
         if cls not in ModelSerializer._instances:
             ModelSerializer._instances[cls] = cls()
         return ModelSerializer._instances[cls]
@@ -319,7 +319,7 @@ class ModelSerializer(Atom):
         return v
 
     async def unflatten_object(
-        self, cls: Type["Model"], state: StateType, scope: ScopeType
+        self, cls: type["Model"], state: StateType, scope: ScopeType
     ) -> Optional["Model"]:
         """Restore the object for the given class, state, and scope.
         If a reference is given the scope should be updated with the newly
@@ -362,7 +362,7 @@ class ModelSerializer(Atom):
         return obj
 
     async def get_or_create(
-        self, cls: Type["Model"], state: Any, scope: ScopeType
+        self, cls: type["Model"], state: Any, scope: ScopeType
     ) -> tuple["Model", bool]:
         """Get a cached object for this _id or create a new one. Subclasses
         should override this as needed to provide object caching if desired.
@@ -416,7 +416,7 @@ class ModelManager(Atom):
     """
 
     #: Stores instances of each class so we can easily reuse them if desired
-    _instances: ClassVar[dict[Type["ModelManager"], "ModelManager"]] = {}
+    _instances: ClassVar[dict[type["ModelManager"], "ModelManager"]] = {}
 
     @classmethod
     def instance(cls) -> "ModelManager":
@@ -430,20 +430,20 @@ class ModelManager(Atom):
     def _default_database(self) -> Any:
         raise NotImplementedError
 
-    def __get__(self, obj: T, cls: Optional[Type[T]] = None):
-        """Handle objects from the class that oType[wns the manager. Subclasses
+    def __get__(self, obj: T, cls: Optional[type[T]] = None):
+        """Handle objects from the class that otype[wns the manager. Subclasses
         should override this as needed.
 
         """
         raise NotImplementedError
 
 
-def generate_getstate(cls: Type["Model"]) -> GetStateFn:
+def generate_getstate(cls: type["Model"]) -> GetStateFn:
     """Generate an optimized __getstate__ function for the given model.
 
     Parameters
     ----------
-    cls: Type[Model]
+    cls: type[Model]
         The clase to generate a getstate function for.
 
     Returns
@@ -495,7 +495,7 @@ def generate_getstate(cls: Type["Model"]) -> GetStateFn:
 class RestoreError(Exception):
     """An exception raised when an error occurs while restoring a model from state."""
 
-    def __init__(self, field: str, cls: Type["Model"], e: Exception):
+    def __init__(self, field: str, cls: type["Model"], e: Exception):
         self.field = field
         self.cls = cls
         self.exc = e
@@ -506,12 +506,12 @@ class RestoreError(Exception):
         )
 
 
-def generate_restorestate(cls: Type["Model"]) -> RestoreStateFn:
+def generate_restorestate(cls: type["Model"]) -> RestoreStateFn:
     """Generate an optimized __restorestate__ function for the given model.
 
     Parameters
     ----------
-    cls: Type[Model]
+    cls: type[Model]
         The clase to generate a getstate function for.
 
     Returns
@@ -787,7 +787,7 @@ class Model(Atom, metaclass=ModelMeta):
     objects: ClassVar[ModelManager] = ModelManager()
 
     @classmethod
-    async def restore(cls: Type[M], state: StateType, **kwargs: Any) -> M:
+    async def restore(cls: type[M], state: StateType, **kwargs: Any) -> M:
         """Restore an object from the database state"""
         assert state is not None
         obj = cls.__new__(cls)
@@ -858,7 +858,7 @@ class JSONSerializer(ModelSerializer):
         """State should be contained in the dict"""
         return state
 
-    def _default_registry(self) -> dict[str, Type[Model]]:
+    def _default_registry(self) -> dict[str, type[Model]]:
         return {m.__model__: m for m in find_subclasses(JSONModel)}
 
 
